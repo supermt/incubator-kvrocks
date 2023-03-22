@@ -91,6 +91,7 @@ class Cluster {
                          Redis::Connection *conn);
   Status SetMasterSlaveRepl();
   Status MigrateSlot(int slot, const std::string &dst_node_id);
+  Status MigrateSlots(std::vector<int> &slots, const std::string &dst_node_id);
   Status ImportSlot(Redis::Connection *conn, int slot, int state);
   std::string GetMyId() const { return myid_; }
   Status DumpClusterNodes(const std::string &file);

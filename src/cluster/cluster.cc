@@ -821,3 +821,8 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
             fmt::format("MOVED {} {}:{}", slot, slots_nodes_[slot]->host_, slots_nodes_[slot]->port_)};
   }
 }
+Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_node_id) {
+  auto env = svr_->storage_->GetDB()->GetEnv();
+  env->SleepForMicroseconds(60 * 1000 * 1000l);
+  return Status();
+}

@@ -126,12 +126,20 @@ class CommandClusterX : public Commander {
     if (subcommand_ == "setnodeid" && args_.size() == 3 && args_[2].size() == kClusterNodeIdLen) return Status::OK();
 
     if (subcommand_ == "migrate") {
-      if (args.size() != 4) return {Status::RedisParseErr, errWrongNumOfArguments};
-
-      slot_ = GET_OR_RET(ParseInt<int64_t>(args[2], 10));
-
-      dst_node_id_ = args[3];
-      return Status::OK();
+      if (args.size() == 4) {
+        slot_ = GET_OR_RET(ParseInt<int64_t>(args[2], 10));
+        dst_node_id_ = args[3];
+        return Status::OK();
+      } else if (args.size() == 5) {
+        slot_ = -1;
+        int64_t start = GET_OR_RET(ParseInt<int64_t>(args[2], 10));
+        int64_t end = GET_OR_RET(ParseInt<int64_t>(args[3], 10));
+        for (int64_t i = start; i < end; i++) {
+          slots_.push_back(static_cast<int>(i));
+        }
+      } else {
+        return {Status::RedisParseErr, errWrongNumOfArguments};
+      }
     }
 
     if (subcommand_ == "setnodes" && args_.size() >= 4) {
@@ -230,7 +238,14 @@ class CommandClusterX : public Commander {
       int64_t v = svr->cluster_->GetVersion();
       *output = Redis::BulkString(std::to_string(v));
     } else if (subcommand_ == "migrate") {
-      Status s = svr->cluster_->MigrateSlot(static_cast<int>(slot_), dst_node_id_);
+      Status s;
+      if (slot_ == -1) {
+        s = svr->cluster_->MigrateSlots(slots_, dst_node_id_);
+
+      } else {
+        s = svr->cluster_->MigrateSlot(static_cast<int>(slot_), dst_node_id_);
+      }
+
       if (s.IsOK()) {
         *output = Redis::SimpleString("OK");
       } else {
@@ -253,6 +268,7 @@ class CommandClusterX : public Commander {
   int64_t slot_ = -1;
   int slot_id_ = -1;
   bool force_ = false;
+  std::vector<int> slots_;
 };
 
 REDIS_REGISTER_COMMANDS(MakeCmdAttr<CommandCluster>("cluster", -2, "cluster no-script", 0, 0, 0),
