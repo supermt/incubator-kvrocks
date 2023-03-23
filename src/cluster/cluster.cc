@@ -822,7 +822,22 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
   }
 }
 Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_node_id) {
-  auto env = svr_->storage_->GetDB()->GetEnv();
-  env->SleepForMicroseconds(60 * 1000 * 1000l);
-  return Status();
+  //  auto env = svr_->storage_->GetDB()->GetEnv();
+  if (svr_->GetConfig()->migrate_method < kSeekAndInsertBatched) {
+    return {Status::NotOK, "The migration method does not support"};
+  }
+  Status s;
+  for (int slot : slots) {
+    s = MigrateSlot(slot, dst_node_id);
+    if (!s.IsOK()) {
+      LOG(ERROR) << "Migrate error for slot: " << slot;
+      return s;
+    }
+    s = SetSlot(slot, dst_node_id, GetVersion() + 1);
+    if (!s.IsOK()) {
+      LOG(ERROR) << "Topo update: " << slot;
+      return s;
+    }
+  }
+  return Status::OK();
 }

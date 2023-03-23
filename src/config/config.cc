@@ -156,6 +156,7 @@ Config::Config() {
       {"fullsync-recv-file-delay", false, new IntField(&fullsync_recv_file_delay, 0, 0, INT_MAX)},
       {"cluster-enabled", true, new YesNoField(&cluster_enabled, false)},
       {"migrate-speed", false, new IntField(&migrate_speed, 4096, 0, INT_MAX)},
+      {"migrate-method", false, new IntField(&migrate_method, kSeekAndInsert, kSeekAndInsert, kInvalidMigration)},
       {"migrate-pipeline-size", false, new IntField(&pipeline_size, 16, 1, INT_MAX)},
       {"migrate-sequence-gap", false, new IntField(&sequence_gap, 10000, 1, INT_MAX)},
       {"unixsocket", true, new StringField(&unixsocket, "")},

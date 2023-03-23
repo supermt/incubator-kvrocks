@@ -91,7 +91,7 @@ class SlotMigrate : public Redis::Database {
 
   Status CreateMigrateHandleThread();
   void Loop();
-  Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int slot,
+  virtual Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int slot,
                       int speed, int pipeline_size, int seq_gap);
   void ReleaseForbiddenSlot();
   void SetMigrateSpeedLimit(int speed) {
@@ -141,7 +141,7 @@ class SlotMigrate : public Redis::Database {
   Status SyncWalAfterForbidSlot();
   void SetForbiddenSlot(int16_t slot);
 
- private:
+ protected:
   enum class ParserState { ArrayLen, BulkLen, BulkData, OneRspEnd };
   enum class ThreadState { Uninitialized, Running, Terminated };
 
@@ -155,6 +155,8 @@ class SlotMigrate : public Redis::Database {
   static const int kMaxLoopTimes = 10;
 
   Server *svr_;
+
+ private:
   MigrateStateMachine state_machine_ = kSlotMigrateNone;
   ParserState parser_state_ = ParserState::ArrayLen;
   std::atomic<ThreadState> thread_state_ = ThreadState::Uninitialized;
@@ -182,4 +184,13 @@ class SlotMigrate : public Redis::Database {
   const rocksdb::Snapshot *slot_snapshot_ = nullptr;
   uint64_t wal_begin_seq_ = 0;
   uint64_t wal_increment_seq_ = 0;
+};
+
+class MultiSlotMigrate : public SlotMigrate {
+ public:
+  explicit MultiSlotMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
+                            int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
+
+  Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int slot,
+                      int speed, int pipeline_size, int seq_gap) override;
 };

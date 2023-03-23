@@ -112,6 +112,7 @@ class ServerLogData {
 
 class SlotImport;
 class SlotMigrate;
+class MultiSlotMigrate;
 
 class Server {
  public:

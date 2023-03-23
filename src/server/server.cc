@@ -152,8 +152,13 @@ Status Server::Start() {
       return s.Prefixed("failed to load cluster nodes info");
     }
     // Create objects used for slot migration
-    slot_migrate_ =
-        std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
+    if (config_->migrate_method >= kSeekAndInsertBatched) {
+      slot_migrate_ = std::make_unique<MultiSlotMigrate>(this, config_->migrate_speed, config_->pipeline_size,
+                                                         config_->sequence_gap);
+    } else {
+      slot_migrate_ =
+          std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
+    }
     slot_import_ = std::make_unique<SlotImport>(this);
     // Create migrating thread
     s = slot_migrate_->CreateMigrateHandleThread();

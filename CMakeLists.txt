@@ -177,6 +177,7 @@ endif()
 
 # kvrocks objects target
 file(GLOB_RECURSE KVROCKS_SRCS src/*.cc)
+MESSAGE( STATUS "Files will be compile: ${KVROCKS_SRCS}.")
 list(FILTER KVROCKS_SRCS EXCLUDE REGEX src/main.cc)
 
 add_library(kvrocks_objs OBJECT ${KVROCKS_SRCS})

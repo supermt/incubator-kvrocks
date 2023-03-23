@@ -137,6 +137,8 @@ class CommandClusterX : public Commander {
         for (int64_t i = start; i < end; i++) {
           slots_.push_back(static_cast<int>(i));
         }
+        dst_node_id_ = args[4];
+        return Status::OK();
       } else {
         return {Status::RedisParseErr, errWrongNumOfArguments};
       }
