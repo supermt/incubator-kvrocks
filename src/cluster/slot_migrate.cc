@@ -42,7 +42,7 @@ static std::map<RedisType, std::string> type_to_cmd = {
     {kRedisZSet, "zadd"},  {kRedisBitmap, "setbit"}, {kRedisSortedint, "siadd"}, {kRedisStream, "xadd"},
 };
 
-SlotMigrate::SlotMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap)
+SlotMigrate::SlotMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap, bool clustered)
     : Database(svr->storage_, kDefaultNamespace), svr_(svr) {
   // Let metadata_cf_handle_ be nullptr, and get them in real time to avoid accessing invalid pointer,
   // because metadata_cf_handle_ and db_ will be destroyed if DB is reopened.
@@ -74,10 +74,11 @@ SlotMigrate::SlotMigrate(Server *svr, int migration_speed, int pipeline_size_lim
   if (svr->IsSlave()) {
     SetMigrateStopFlag(true);
   }
+  this->clustered_ = clustered;
 }
 
 Status SlotMigrate::MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port,
-                                 int slot, int speed, int pipeline_size, int seq_gap) {
+                                 int slot, int speed, int pipeline_size, int seq_gap, bool join) {
   // Only one slot migration job at the same time
   int16_t no_slot = -1;
   if (!migrate_slot_.compare_exchange_strong(no_slot, (int16_t)slot)) {
@@ -103,13 +104,15 @@ Status SlotMigrate::MigrateStart(Server *svr, const std::string &node_id, const 
   dst_node_ = node_id;
 
   // Create migration job
+
   auto job = std::make_unique<SlotMigrateJob>(slot, dst_ip, dst_port, speed, pipeline_size, seq_gap);
+  LOG(INFO) << "[migrate] Start migrating slot " << slot << " to " << dst_ip << ":" << dst_port;
   {
     std::lock_guard<std::mutex> guard(job_mutex_);
     slot_job_ = std::move(job);
     job_cv_.notify_one();
   }
-  LOG(INFO) << "[migrate] Start migrating slot " << slot << " to " << dst_ip << ":" << dst_port;
+
   return Status::OK();
 }
 

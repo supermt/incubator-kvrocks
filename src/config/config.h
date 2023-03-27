@@ -143,6 +143,7 @@ struct Config {
   int pipeline_size;
   int sequence_gap;
   int migrate_method = kSeekAndInsert;
+  int max_bg_migration = 4;
 
   int log_retention_days;
   // profiling

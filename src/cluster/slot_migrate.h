@@ -84,15 +84,16 @@ struct SlotMigrateJob {
 class SlotMigrate : public Redis::Database {
  public:
   explicit SlotMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
-                       int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
+                       int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit,
+                       bool batched = false);
   SlotMigrate(const SlotMigrate &other) = delete;
   SlotMigrate &operator=(const SlotMigrate &other) = delete;
   ~SlotMigrate();
 
   Status CreateMigrateHandleThread();
   void Loop();
-  virtual Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int slot,
-                      int speed, int pipeline_size, int seq_gap);
+  virtual Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port,
+                              int slot, int speed, int pipeline_size, int seq_gap, bool join = false);
   void ReleaseForbiddenSlot();
   void SetMigrateSpeedLimit(int speed) {
     if (speed >= 0) migration_speed_ = speed;
@@ -156,6 +157,10 @@ class SlotMigrate : public Redis::Database {
 
   Server *svr_;
 
+  std::string dst_node_;
+  std::string dst_ip_;
+  bool clustered_;
+
  private:
   MigrateStateMachine state_machine_ = kSlotMigrateNone;
   ParserState parser_state_ = ParserState::ArrayLen;
@@ -171,8 +176,6 @@ class SlotMigrate : public Redis::Database {
   std::mutex job_mutex_;
   std::condition_variable job_cv_;
   std::unique_ptr<SlotMigrateJob> slot_job_;
-  std::string dst_node_;
-  std::string dst_ip_;
   int dst_port_ = -1;
   std::atomic<int16_t> forbidden_slot_ = -1;
   std::atomic<int16_t> migrate_slot_ = -1;
@@ -186,11 +189,8 @@ class SlotMigrate : public Redis::Database {
   uint64_t wal_increment_seq_ = 0;
 };
 
-class MultiSlotMigrate : public SlotMigrate {
- public:
-  explicit MultiSlotMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
-                            int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
-
-  Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int slot,
-                      int speed, int pipeline_size, int seq_gap) override;
-};
+// class MultiSlotMigrate : public SlotMigrate {
+//  public:
+//   explicit MultiSlotMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
+//                             int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
+// };

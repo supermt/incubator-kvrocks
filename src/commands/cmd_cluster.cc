@@ -35,14 +35,15 @@ class CommandCluster : public Commander {
     if (subcommand_ == "keyslot" && args_.size() == 3) return Status::OK();
 
     if (subcommand_ == "import") {
-      if (args.size() != 4) return {Status::RedisParseErr, errWrongNumOfArguments};
-      slot_ = GET_OR_RET(ParseInt<int64_t>(args[2], 10));
-
-      auto state = ParseInt<unsigned>(args[3], {kImportStart, kImportNone}, 10);
-      if (!state) return {Status::NotOK, "Invalid import state"};
-
-      state_ = static_cast<ImportStatus>(*state);
-      return Status::OK();
+      if (args.size() == 4) {
+        slot_ = GET_OR_RET(ParseInt<int64_t>(args[2], 10));
+        auto state = ParseInt<unsigned>(args[3], {kImportStart, kImportNone}, 10);
+        if (!state) return {Status::NotOK, "Invalid import state"};
+        state_ = static_cast<ImportStatus>(*state);
+        return Status::OK();
+      } else {
+        return {Status::RedisParseErr, errWrongNumOfArguments};
+      }
     }
 
     return {Status::RedisParseErr, "CLUSTER command, CLUSTER INFO|NODES|SLOTS|KEYSLOT"};
@@ -98,7 +99,10 @@ class CommandCluster : public Commander {
         *output = Redis::Error(s.Msg());
       }
     } else if (subcommand_ == "import") {
-      Status s = svr->cluster_->ImportSlot(conn, static_cast<int>(slot_), state_);
+      Status s;
+      batched_import = svr->GetConfig()->migrate_method >= kSeekAndInsertBatched;
+      s = svr->cluster_->ImportSlot(conn, static_cast<int>(slot_), state_, batched_import);
+
       if (s.IsOK()) {
         *output = Redis::SimpleString("OK");
       } else {
@@ -114,6 +118,7 @@ class CommandCluster : public Commander {
   std::string subcommand_;
   int64_t slot_ = -1;
   ImportStatus state_ = kImportNone;
+  bool batched_import = false;
 };
 
 class CommandClusterX : public Commander {

@@ -54,7 +54,7 @@ class ClusterNode {
   std::string slots_info_;
   std::bitset<kClusterSlots> slots_;
   std::vector<std::string> replicas;
-  int importing_slot_ = -1;
+  std::vector<int> importing_slot_;
 };
 
 struct SlotInfo {
@@ -92,7 +92,8 @@ class Cluster {
   Status SetMasterSlaveRepl();
   Status MigrateSlot(int slot, const std::string &dst_node_id);
   Status MigrateSlots(std::vector<int> &slots, const std::string &dst_node_id);
-  Status ImportSlot(Redis::Connection *conn, int slot, int state);
+  Status ImportSlot(Redis::Connection *conn, int slot, int state, bool clusterd = false);
+
   std::string GetMyId() const { return myid_; }
   Status DumpClusterNodes(const std::string &file);
   Status LoadClusterNodes(const std::string &file_path);

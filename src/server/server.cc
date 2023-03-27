@@ -153,12 +153,14 @@ Status Server::Start() {
     }
     // Create objects used for slot migration
     if (config_->migrate_method >= kSeekAndInsertBatched) {
-      slot_migrate_ = std::make_unique<MultiSlotMigrate>(this, config_->migrate_speed, config_->pipeline_size,
-                                                         config_->sequence_gap);
-    } else {
-      slot_migrate_ =
-          std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
+      this->migration_pool_ = std::make_unique<ThreadPool>(config_->max_bg_migration);
+      //      slot_migrate_ = std::make_unique<MultiSlotMigrate>(this, config_->migrate_speed, config_->pipeline_size,
+      //                                                         config_->sequence_gap);
     }
+
+    slot_migrate_ =
+        std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
+
     slot_import_ = std::make_unique<SlotImport>(this);
     // Create migrating thread
     s = slot_migrate_->CreateMigrateHandleThread();
@@ -1738,3 +1740,7 @@ void Server::ResetWatchedKeys(Redis::Connection *conn) {
     watched_key_size_ = watched_key_map_.size();
   }
 }
+// Status Server::PerformMigrationOnce(Server *svr) {
+//   std::unique_ptr<SlotMigrate> migrate = std::make_unique<SlotMigrate>(
+//       svr, svr->config_->migrate_speed, svr->config_->pipeline_size, svr->config_->sequence_gap);
+// }

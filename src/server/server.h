@@ -37,6 +37,7 @@
 #include "cluster/slot_import.h"
 #include "cluster/slot_migrate.h"
 #include "commands/commander.h"
+#include "common/thread_pool.h"
 #include "lua.hpp"
 #include "server/redis_connection.h"
 #include "stats/log_collector.h"
@@ -223,12 +224,15 @@ class Server {
   static std::atomic<int> unix_time_;
   std::unique_ptr<SlotMigrate> slot_migrate_;
   std::unique_ptr<SlotImport> slot_import_;
+  std::unique_ptr<ThreadPool> migration_pool_;
+  std::map<int, std::unique_ptr<SlotImport>> slot_import_map;
 
   void UpdateWatchedKeysFromArgs(const std::vector<std::string> &args, const Redis::CommandAttributes &attr);
   void UpdateWatchedKeysManually(const std::vector<std::string> &keys);
   void WatchKey(Redis::Connection *conn, const std::vector<std::string> &keys);
   bool IsWatchedKeysModified(Redis::Connection *conn);
   void ResetWatchedKeys(Redis::Connection *conn);
+  //  static Status PerformMigrationOnce(Server* svr);
 
 #ifdef ENABLE_OPENSSL
   UniqueSSLContext ssl_ctx_;

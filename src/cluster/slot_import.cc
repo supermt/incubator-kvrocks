@@ -70,7 +70,6 @@ bool SlotImport::Success(int slot) {
 
   import_status_ = kImportSuccess;
   import_fd_ = -1;
-
   return true;
 }
 

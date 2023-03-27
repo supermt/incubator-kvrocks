@@ -322,13 +322,26 @@ Status Cluster::MigrateSlot(int slot, const std::string &dst_node_id) {
   }
 
   const auto dst = nodes_[dst_node_id];
-  Status s = svr_->slot_migrate_->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot,
-                                               svr_->GetConfig()->migrate_speed, svr_->GetConfig()->pipeline_size,
-                                               svr_->GetConfig()->sequence_gap);
+  Status s;
+  if (svr_->GetConfig()->migrate_method == kSeekAndInsertBatched) {
+    std::unique_ptr<SlotMigrate> slot_migrate = std::make_unique<SlotMigrate>(svr_);
+    s = slot_migrate->CreateMigrateHandleThread();
+    if (!s.IsOK()) {
+      return s;
+    }
+    LOG(INFO) << "Migrating background jobs";
+    s = slot_migrate->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot, svr_->GetConfig()->migrate_speed,
+                                   svr_->GetConfig()->pipeline_size, svr_->GetConfig()->sequence_gap, true);
+    slot_migrate.release();
+  } else {
+    s = svr_->slot_migrate_->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot,
+                                          svr_->GetConfig()->migrate_speed, svr_->GetConfig()->pipeline_size,
+                                          svr_->GetConfig()->sequence_gap);
+  }
   return s;
 }
 
-Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state) {
+Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state, bool clusterd) {
   if (IsNotMaster()) {
     return {Status::NotOK, "Slave can't import slot"};
   }
@@ -336,26 +349,45 @@ Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state) {
   if (!IsValidSlot(slot)) {
     return {Status::NotOK, errSlotOutOfRange};
   }
+  auto pImport = svr_->slot_import_.get();
 
   switch (state) {
-    case kImportStart:
-      if (!svr_->slot_import_->Start(conn->GetFD(), slot)) {
-        return {Status::NotOK, fmt::format("Can't start importing slot {}", slot)};
+    case kImportStart:{
+
+    }
+      if (clusterd) {
+        svr_->slot_import_map.emplace(slot, std::make_unique<SlotImport>(svr_));
+        bool start_ok = svr_->slot_import_map[slot]->Start(conn->GetFD(), slot);
+        if (!start_ok) {
+          return {Status::NotOK, fmt::format("Can't start importing slot {}", slot)};
+        }
+
+        conn->SetImporting();
+        myself_->importing_slot_.push_back(slot);
+        conn->close_cb_ = [object_ptr = svr_->slot_import_map[slot].get(), capture_fd = conn->GetFD()](int fd) {
+          object_ptr->StopForLinkError(capture_fd);
+        };
+      } else {
+        if (!svr_->slot_import_->Start(conn->GetFD(), slot)) {
+          return {Status::NotOK, fmt::format("Can't start importing slot {}", slot)};
+        }
+
+        // Set link importing
+        conn->SetImporting();
+        myself_->importing_slot_.push_back(slot);
+        // Set link error callback
+        conn->close_cb_ = [object_ptr = svr_->slot_import_.get(), capture_fd = conn->GetFD()](int fd) {
+          object_ptr->StopForLinkError(capture_fd);
+        };
+        // Stop forbidding writing slot to accept write commands
+        if (slot == svr_->slot_migrate_->GetForbiddenSlot()) svr_->slot_migrate_->ReleaseForbiddenSlot();
+        LOG(INFO) << "[import] Start importing slot " << slot;
       }
 
-      // Set link importing
-      conn->SetImporting();
-      myself_->importing_slot_ = slot;
-      // Set link error callback
-      conn->close_cb_ = [object_ptr = svr_->slot_import_.get(), capture_fd = conn->GetFD()](int fd) {
-        object_ptr->StopForLinkError(capture_fd);
-      };
-      // Stop forbidding writing slot to accept write commands
-      if (slot == svr_->slot_migrate_->GetForbiddenSlot()) svr_->slot_migrate_->ReleaseForbiddenSlot();
-      LOG(INFO) << "[import] Start importing slot " << slot;
       break;
     case kImportSuccess:
-      if (!svr_->slot_import_->Success(slot)) {
+      if (clusterd) pImport = svr_->slot_import_map[slot].get();
+      if (!pImport->Success(slot)) {
         LOG(ERROR) << "[import] Failed to set slot importing success, maybe slot is wrong"
                    << ", received slot: " << slot << ", current slot: " << svr_->slot_import_->GetSlot();
         return {Status::NotOK, fmt::format("Failed to set slot {} importing success", slot)};
@@ -364,7 +396,8 @@ Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state) {
       LOG(INFO) << "[import] Succeed to import slot " << slot;
       break;
     case kImportFailed:
-      if (!svr_->slot_import_->Fail(slot)) {
+      if (clusterd) pImport = svr_->slot_import_map[slot].get();
+      if (!pImport->Fail(slot)) {
         LOG(ERROR) << "[import] Failed to set slot importing error, maybe slot is wrong"
                    << ", received slot: " << slot << ", current slot: " << svr_->slot_import_->GetSlot();
         return {Status::NotOK, fmt::format("Failed to set slot {} importing error", slot)};
@@ -802,7 +835,11 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
     }
 
     return Status::OK();  // I'm serving this slot
-  } else if (myself_ && myself_->importing_slot_ == slot && conn->IsImporting()) {
+  } else if (myself_ &&
+             std::find(myself_->importing_slot_.begin(), myself_->importing_slot_.end(), slot) !=
+                 myself_->importing_slot_.end()
+             //             myself_->importing_slot_ == slot
+             && conn->IsImporting()) {
     // While data migrating, the topology of the destination node has not been changed.
     // The destination node has to serve the requests from the migrating slot,
     // although the slot is not belong to itself. Therefore, we record the importing slot
@@ -827,17 +864,33 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
     return {Status::NotOK, "The migration method does not support"};
   }
   Status s;
+
+  std::vector<std::future<Status> > results;
+
   for (int slot : slots) {
-    s = MigrateSlot(slot, dst_node_id);
-    if (!s.IsOK()) {
-      LOG(ERROR) << "Migrate error for slot: " << slot;
-      return s;
-    }
-    s = SetSlot(slot, dst_node_id, GetVersion() + 1);
-    if (!s.IsOK()) {
-      LOG(ERROR) << "Topo update: " << slot;
-      return s;
+    results.emplace_back(svr_->migration_pool_->enqueue(&Cluster::MigrateSlot, this, slot, dst_node_id));
+  }
+  for (auto &&result : results) {
+    Status mg_status = result.get();
+    LOG(INFO) << mg_status.GetCode() << mg_status.Msg();
+    if (!mg_status.IsOK()) {
+      return mg_status;
     }
   }
+
+  //  for (int slot : slots) {
+  //    auto result = svr_->migration_pool_->enqueue(&Cluster::MigrateSlot, this, slot, dst_node_id);
+  //    //    s = MigrateSlot(slot, dst_node_id);
+  //
+  //    if (!s.IsOK()) {
+  //      LOG(ERROR) << "Migrate error for slot: " << slot;
+  //      return s;
+  //    }
+  //    s = SetSlot(slot, dst_node_id, GetVersion() + 1);
+  //    if (!s.IsOK()) {
+  //      LOG(ERROR) << "Topo update: " << slot;
+  //      return s;
+  //    }
+  //  }
   return Status::OK();
 }
