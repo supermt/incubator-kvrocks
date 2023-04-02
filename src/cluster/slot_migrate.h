@@ -36,6 +36,7 @@
 
 #include "config.h"
 #include "encoding.h"
+#include "fd_util.h"
 #include "parse_util.h"
 #include "redis_slot.h"
 #include "server/server.h"
@@ -62,7 +63,16 @@ enum class KeyMigrationResult { kMigrated, kExpired, kUnderlyingStructEmpty };
 
 struct SlotMigrateJob {
   SlotMigrateJob(int slot, std::string dst_ip, int port, int speed, int pipeline_size, int seq_gap)
-      : migrate_slot_(slot),
+      : slots_(0),
+        migrate_slot_(slot),
+        dst_ip_(std::move(dst_ip)),
+        dst_port_(port),
+        speed_limit_(speed),
+        pipeline_size_(pipeline_size),
+        seq_gap_(seq_gap) {}
+  SlotMigrateJob(std::vector<int> &slots, std::string dst_ip, int port, int speed, int pipeline_size, int seq_gap)
+      : slots_(slots),
+        migrate_slot_(-1),
         dst_ip_(std::move(dst_ip)),
         dst_port_(port),
         speed_limit_(speed),
@@ -73,6 +83,7 @@ struct SlotMigrateJob {
   ~SlotMigrateJob() { close(slot_fd_); }
 
   int slot_fd_ = -1;  // fd to send data to dst during migrate job
+  std::vector<int> slots_;
   int migrate_slot_;
   std::string dst_ip_;
   int dst_port_;
@@ -92,8 +103,11 @@ class SlotMigrate : public Redis::Database {
 
   Status CreateMigrateHandleThread();
   void Loop();
+  Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int slot,
+                      int speed, int pipeline_size, int seq_gap, bool join = false);
+  virtual Status SetMigrationSlots(std::vector<int> &target_slots);
   virtual Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port,
-                              int slot, int speed, int pipeline_size, int seq_gap, bool join = false);
+                              int seq_gap, bool join);
   void ReleaseForbiddenSlot();
   void SetMigrateSpeedLimit(int speed) {
     if (speed >= 0) migration_speed_ = speed;
@@ -111,11 +125,12 @@ class SlotMigrate : public Redis::Database {
   int16_t GetMigratingSlot() const { return migrate_slot_; }
   void GetMigrateInfo(std::string *info) const;
   bool IsTerminated() { return thread_state_ == ThreadState::Terminated; }
+  bool IsBatched() { return batched_; }
 
- private:
+ protected:
   void RunStateMachine();
   Status Start();
-  Status SendSnapshot();
+  virtual Status SendSnapshot();
   Status SyncWal();
   Status Success();
   Status Fail();
@@ -141,11 +156,12 @@ class SlotMigrate : public Redis::Database {
   Status SyncWalBeforeForbidSlot();
   Status SyncWalAfterForbidSlot();
   void SetForbiddenSlot(int16_t slot);
+  int OpenDataFile(const std::string &repl_file, uint64_t *file_size);
 
- protected:
   enum class ParserState { ArrayLen, BulkLen, BulkData, OneRspEnd };
   enum class ThreadState { Uninitialized, Running, Terminated };
 
+  std::vector<int> migrate_slots_;
   static const size_t kProtoInlineMaxSize = 16 * 1024L;
   static const size_t kProtoBulkMaxSize = 512 * 1024L * 1024L;
   static const int kMaxNotifyRetryTimes = 3;
@@ -159,7 +175,15 @@ class SlotMigrate : public Redis::Database {
 
   std::string dst_node_;
   std::string dst_ip_;
-  bool clustered_;
+
+  std::unique_ptr<SlotMigrateJob> slot_job_;
+
+  const rocksdb::Snapshot *slot_snapshot_ = nullptr;
+
+  std::atomic<MigrateTaskState> migrate_state_ = kMigrateNone;
+
+  std::mutex job_mutex_;
+  std::condition_variable job_cv_;
 
  private:
   MigrateStateMachine state_machine_ = kSlotMigrateNone;
@@ -173,24 +197,47 @@ class SlotMigrate : public Redis::Database {
   uint64_t last_send_time_ = 0;
 
   std::thread t_;
-  std::mutex job_mutex_;
-  std::condition_variable job_cv_;
-  std::unique_ptr<SlotMigrateJob> slot_job_;
   int dst_port_ = -1;
   std::atomic<int16_t> forbidden_slot_ = -1;
   std::atomic<int16_t> migrate_slot_ = -1;
   int16_t migrate_failed_slot_ = -1;
-  std::atomic<MigrateTaskState> migrate_state_ = kMigrateNone;
   std::atomic<bool> stop_migrate_ = false;  // if is true migration will be stopped but the thread won't be destroyed
   std::string current_migrate_key_;
   uint64_t slot_snapshot_time_ = 0;
-  const rocksdb::Snapshot *slot_snapshot_ = nullptr;
   uint64_t wal_begin_seq_ = 0;
   uint64_t wal_increment_seq_ = 0;
+  bool batched_;
 };
 
-// class MultiSlotMigrate : public SlotMigrate {
-//  public:
-//   explicit MultiSlotMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
-//                             int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
-// };
+class CompactAndMergeMigrate : public SlotMigrate {
+ public:
+  explicit CompactAndMergeMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
+                                  int pipeline_size_limit = kDefaultPipelineSizeLimit,
+                                  int seq_gap = kDefaultSeqGapLimit, bool batched = false);
+  Status SetMigrationSlots(std::vector<int> &target_slots) override;
+
+  Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int seq_gap,
+                      bool join) override;
+
+ private:
+  Status SendRemoteSST();
+  std::vector<std::string> compact_results;
+  std::vector<rocksdb::ColumnFamilyDescriptor> cf_desc_;
+  std::vector<std::string> pending_compact_ssts_;
+  std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
+  void CreateCFHandles();
+  rocksdb::DB *compact_ptr;
+
+ protected:
+  Status SendSnapshot() override;
+  Status PickSSTs();
+  rocksdb::ColumnFamilyHandle *GetMetadataCFH();
+  rocksdb::ColumnFamilyHandle *GetSubkeyCFH();
+};
+
+class LevelMigrate : public CompactAndMergeMigrate {
+ public:
+  explicit LevelMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
+                        int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit,
+                        bool batched = false);
+};

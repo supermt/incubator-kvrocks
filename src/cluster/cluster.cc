@@ -297,48 +297,32 @@ Status Cluster::SetSlotImported(int slot) {
 }
 
 Status Cluster::MigrateSlot(int slot, const std::string &dst_node_id) {
-  if (nodes_.find(dst_node_id) == nodes_.end()) {
-    return {Status::NotOK, "Can't find the destination node id"};
-  }
-
-  if (!IsValidSlot(slot)) {
-    return {Status::NotOK, errSlotOutOfRange};
-  }
-
-  if (slots_nodes_[slot] != myself_) {
-    return {Status::NotOK, "Can't migrate slot which doesn't belong to me"};
-  }
-
-  if (IsNotMaster()) {
-    return {Status::NotOK, "Slave can't migrate slot"};
-  }
-
-  if (nodes_[dst_node_id]->role_ != kClusterMaster) {
-    return {Status::NotOK, "Can't migrate slot to a slave"};
-  }
-
-  if (nodes_[dst_node_id] == myself_) {
-    return {Status::NotOK, "Can't migrate slot to myself"};
-  }
-
   const auto dst = nodes_[dst_node_id];
-  Status s;
-  if (svr_->GetConfig()->migrate_method == kSeekAndInsertBatched) {
-    std::unique_ptr<SlotMigrate> slot_migrate = std::make_unique<SlotMigrate>(svr_);
-    s = slot_migrate->CreateMigrateHandleThread();
-    if (!s.IsOK()) {
+  Status s = ValidateMigrateSlot(slot, dst_node_id);
+  if (!s.IsOK()) return s;
+
+  switch (svr_->GetConfig()->migrate_method) {
+    case kSeekAndInsert: {
+      s = svr_->slot_migrate_->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot,
+                                            svr_->GetConfig()->migrate_speed, svr_->GetConfig()->pipeline_size,
+                                            svr_->GetConfig()->sequence_gap);
       return s;
     }
-    LOG(INFO) << "Migrating background jobs";
-    s = slot_migrate->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot, svr_->GetConfig()->migrate_speed,
-                                   svr_->GetConfig()->pipeline_size, svr_->GetConfig()->sequence_gap, true);
-    slot_migrate.release();
-  } else {
-    s = svr_->slot_migrate_->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot,
-                                          svr_->GetConfig()->migrate_speed, svr_->GetConfig()->pipeline_size,
-                                          svr_->GetConfig()->sequence_gap);
+    case kSeekAndInsertBatched: {
+      std::unique_ptr<SlotMigrate> slot_migrate = std::make_unique<SlotMigrate>(svr_);
+      s = slot_migrate->CreateMigrateHandleThread();
+      if (!s.IsOK()) {
+        return s;
+      }
+      LOG(INFO) << "Migrating background jobs";
+      s = slot_migrate->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot, svr_->GetConfig()->migrate_speed,
+                                     svr_->GetConfig()->pipeline_size, svr_->GetConfig()->sequence_gap, true);
+      slot_migrate.release();
+      return s;
+    }
+    default:  // kCompactAndMerge = 2, kLevelMigration = 3, these two method do not support single slot migration
+      return {Status::NotOK, "This migration method does not support single slot migration"};
   }
-  return s;
 }
 
 Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state, bool clusterd) {
@@ -352,8 +336,7 @@ Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state, bool cl
   auto pImport = svr_->slot_import_.get();
 
   switch (state) {
-    case kImportStart:{
-
+    case kImportStart: {
     }
       if (clusterd) {
         svr_->slot_import_map.emplace(slot, std::make_unique<SlotImport>(svr_));
@@ -860,37 +843,74 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
 }
 Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_node_id) {
   //  auto env = svr_->storage_->GetDB()->GetEnv();
-  if (svr_->GetConfig()->migrate_method < kSeekAndInsertBatched) {
-    return {Status::NotOK, "The migration method does not support"};
-  }
+
   Status s;
-
+  auto dst = nodes_[dst_node_id];
   std::vector<std::future<Status> > results;
-
-  for (int slot : slots) {
-    results.emplace_back(svr_->migration_pool_->enqueue(&Cluster::MigrateSlot, this, slot, dst_node_id));
-  }
-  for (auto &&result : results) {
-    Status mg_status = result.get();
-    LOG(INFO) << mg_status.GetCode() << mg_status.Msg();
-    if (!mg_status.IsOK()) {
-      return mg_status;
+  switch (svr_->GetConfig()->migrate_method) {
+    case kSeekAndInsert: {
+      return {Status::NotOK, "This migration method does not support multi-slot migration"};
     }
+    case kSeekAndInsertBatched: {
+      for (int slot : slots) {
+        results.emplace_back(svr_->migration_pool_->enqueue(&Cluster::MigrateSlot, this, slot, dst_node_id));
+      }
+      for (auto &&result : results) {
+        Status mg_status = result.get();
+        LOG(INFO) << mg_status.GetCode() << mg_status.Msg();
+        if (!mg_status.IsOK()) {
+          return mg_status;
+        }
+      }
+      break;
+    }
+    case kCompactAndMerge:
+    case kLevelMigration: {
+      // TODO: For migration, you need to
+      s = this->svr_->slot_migrate_->SetMigrationSlots(slots);
+      if (!s.IsOK()) return s;
+      s = svr_->slot_migrate_->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, svr_->GetConfig()->sequence_gap,
+                                            false);
+      if (!s.IsOK()) return s;
+      break;
+    }
+    default:  // kCompactAndMerge = 2, kLevelMigration = 3, these two method do not support single slot migration
+      return {Status::NotOK, "This migration method does not support single slot migration"};
   }
 
-  //  for (int slot : slots) {
-  //    auto result = svr_->migration_pool_->enqueue(&Cluster::MigrateSlot, this, slot, dst_node_id);
-  //    //    s = MigrateSlot(slot, dst_node_id);
-  //
-  //    if (!s.IsOK()) {
-  //      LOG(ERROR) << "Migrate error for slot: " << slot;
-  //      return s;
-  //    }
-  //    s = SetSlot(slot, dst_node_id, GetVersion() + 1);
-  //    if (!s.IsOK()) {
-  //      LOG(ERROR) << "Topo update: " << slot;
-  //      return s;
-  //    }
-  //  }
+  LOG(INFO) << "[cluster migration] Finished slot migration cmds sending, start to set nodes";
+
+  // Migration succeed, set slots.
+  for (int slot : slots) {
+    s = SetSlot(slot, dst_node_id, version_ + 1);
+    if (!s.IsOK()) return s;
+  }
+
+  return Status::OK();
+}
+Status Cluster::ValidateMigrateSlot(int slot, const std::string &dst_node_id) {
+  if (nodes_.find(dst_node_id) == nodes_.end()) {
+    return {Status::NotOK, "Can't find the destination node id"};
+  }
+
+  if (!IsValidSlot(slot)) {
+    return {Status::NotOK, errSlotOutOfRange};
+  }
+
+  if (slots_nodes_[slot] != myself_) {
+    return {Status::NotOK, "Can't migrate slot which doesn't belong to me"};
+  }
+
+  if (IsNotMaster()) {
+    return {Status::NotOK, "Slave can't migrate slot"};
+  }
+
+  if (nodes_[dst_node_id]->role_ != kClusterMaster) {
+    return {Status::NotOK, "Can't migrate slot to a slave"};
+  }
+
+  if (nodes_[dst_node_id] == myself_) {
+    return {Status::NotOK, "Can't migrate slot to myself"};
+  }
   return Status::OK();
 }

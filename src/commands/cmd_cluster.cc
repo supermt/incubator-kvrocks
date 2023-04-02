@@ -100,7 +100,8 @@ class CommandCluster : public Commander {
       }
     } else if (subcommand_ == "import") {
       Status s;
-      batched_import = svr->GetConfig()->migrate_method >= kSeekAndInsertBatched;
+      batched_import = svr->slot_migrate_->IsBatched();
+      //      svr->GetConfig()->migrate_method >= kSeekAndInsertBatched;
       s = svr->cluster_->ImportSlot(conn, static_cast<int>(slot_), state_, batched_import);
 
       if (s.IsOK()) {

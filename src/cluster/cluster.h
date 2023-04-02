@@ -90,6 +90,7 @@ class Cluster {
   Status CanExecByMySelf(const Redis::CommandAttributes *attributes, const std::vector<std::string> &cmd_tokens,
                          Redis::Connection *conn);
   Status SetMasterSlaveRepl();
+  Status ValidateMigrateSlot(int slot, const std::string &dst_node_id);
   Status MigrateSlot(int slot, const std::string &dst_node_id);
   Status MigrateSlots(std::vector<int> &slots, const std::string &dst_node_id);
   Status ImportSlot(Redis::Connection *conn, int slot, int state, bool clusterd = false);

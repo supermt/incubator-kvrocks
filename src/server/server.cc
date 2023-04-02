@@ -152,10 +152,27 @@ Status Server::Start() {
       return s.Prefixed("failed to load cluster nodes info");
     }
     // Create objects used for slot migration
-    if (config_->migrate_method >= kSeekAndInsertBatched) {
-      this->migration_pool_ = std::make_unique<ThreadPool>(config_->max_bg_migration);
-      //      slot_migrate_ = std::make_unique<MultiSlotMigrate>(this, config_->migrate_speed, config_->pipeline_size,
-      //                                                         config_->sequence_gap);
+    switch (config_->migrate_method) {
+      case kSeekAndInsert: {
+        slot_migrate_ =
+            std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
+        break;
+      }
+      case kSeekAndInsertBatched: {
+        this->migration_pool_ = std::make_unique<ThreadPool>(config_->max_bg_migration);
+        break;
+      }
+      case kCompactAndMerge: {
+        this->slot_migrate_ = std::make_unique<CompactAndMergeMigrate>(
+            this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap, true);
+      }
+      case kLevelMigration: {
+        this->slot_migrate_ = std::make_unique<LevelMigrate>(this, config_->migrate_speed, config_->pipeline_size,
+                                                             config_->sequence_gap, true);
+        this->migration_pool_ = std::make_unique<ThreadPool>(config_->max_bg_migration);
+      }
+      default:
+        return {Status::NotOK, "Current Migration method is not supported"};
     }
 
     slot_migrate_ =

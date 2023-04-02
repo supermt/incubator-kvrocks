@@ -46,7 +46,13 @@ enum SupervisedMode { kSupervisedNone = 0, kSupervisedAutoDetect, kSupervisedSys
 constexpr const char *TLS_AUTH_CLIENTS_NO = "no";
 constexpr const char *TLS_AUTH_CLIENTS_OPTIONAL = "optional";
 
-enum MigrationStrategy : int { kSeekAndInsert = 0, kSeekAndInsertBatched = 1, kCompactAndMerge = 2, kInvalidMigration };
+enum MigrationStrategy : int {
+  kSeekAndInsert = 0,
+  kSeekAndInsertBatched = 1,
+  kCompactAndMerge = 2,
+  kLevelMigration = 3,
+  kInvalidMigration
+};
 constexpr const size_t KiB = 1024L;
 constexpr const size_t MiB = 1024L * KiB;
 constexpr const size_t GiB = 1024L * MiB;

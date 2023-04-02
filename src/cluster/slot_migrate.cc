@@ -20,6 +20,8 @@
 
 #include "slot_migrate.h"
 
+#include <fcntl.h>
+
 #include <memory>
 #include <utility>
 
@@ -28,6 +30,8 @@
 #include "fmt/format.h"
 #include "io_util.h"
 #include "storage/batch_extractor.h"
+#include "storage/compact_filter.h"
+#include "storage/table_properties_collector.h"
 #include "thread_util.h"
 #include "time_util.h"
 #include "types/redis_stream_base.h"
@@ -42,8 +46,8 @@ static std::map<RedisType, std::string> type_to_cmd = {
     {kRedisZSet, "zadd"},  {kRedisBitmap, "setbit"}, {kRedisSortedint, "siadd"}, {kRedisStream, "xadd"},
 };
 
-SlotMigrate::SlotMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap, bool clustered)
-    : Database(svr->storage_, kDefaultNamespace), svr_(svr) {
+SlotMigrate::SlotMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap, bool batched)
+    : Database(svr->storage_, kDefaultNamespace), svr_(svr), batched_(batched) {
   // Let metadata_cf_handle_ be nullptr, and get them in real time to avoid accessing invalid pointer,
   // because metadata_cf_handle_ and db_ will be destroyed if DB is reopened.
   // [Situation]:
@@ -74,7 +78,6 @@ SlotMigrate::SlotMigrate(Server *svr, int migration_speed, int pipeline_size_lim
   if (svr->IsSlave()) {
     SetMigrateStopFlag(true);
   }
-  this->clustered_ = clustered;
 }
 
 Status SlotMigrate::MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port,
@@ -272,9 +275,19 @@ Status SlotMigrate::Start() {
   }
 
   // Set destination node import status to START
-  auto s = SetDstImportStatus(slot_job_->slot_fd_, kImportStart);
-  if (!s.IsOK()) {
-    return s.Prefixed(errFailedToSetImportStatus);
+  Status s;
+  if (this->IsBatched() && slot_job_->slots_.size() > 0) {
+    for (auto slot : migrate_slots_) {
+      s = SetDstImportStatus(slot, kImportStart);
+      if (!s.IsOK()) {
+        return s.Prefixed(errFailedToSetImportStatus);
+      }
+    }
+  } else {
+    s = SetDstImportStatus(slot_job_->slot_fd_, kImportStart);
+    if (!s.IsOK()) {
+      return s.Prefixed(errFailedToSetImportStatus);
+    }
   }
 
   LOG(INFO) << "[migrate] Start migrating slot " << migrate_slot_ << ", connect destination fd " << slot_job_->slot_fd_;
@@ -1095,4 +1108,27 @@ void SlotMigrate::GetMigrateInfo(std::string *info) const {
 
   *info =
       fmt::format("migrating_slot: {}\r\ndestination_node: {}\r\nmigrating_state: {}\r\n", slot, dst_node_, task_state);
+}
+Status SlotMigrate::SetMigrationSlots(std::vector<int> &target_slots) {
+  return {Status::NotOK, "Not supported operation"};
+}
+Status SlotMigrate::MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port,
+                                 int seq_gap, bool join) {
+  return {Status::NotOK, "Interactive-state-copying methods should specify the migrating slot"};
+}
+int SlotMigrate::OpenDataFile(const std::string &repl_file, uint64_t *file_size) {
+  std::string abs_path = repl_file[0] == '/' ? repl_file : svr_->GetConfig()->db_dir + "/" + repl_file;
+  auto s = storage_->GetDB()->GetEnv()->FileExists(abs_path);
+  if (!s.ok()) {
+    LOG(ERROR) << "[storage] Data file [" << abs_path << "] not found";
+    return NullFD;
+  }
+
+  storage_->GetDB()->GetEnv()->GetFileSize(abs_path, file_size);
+  auto rv = open(abs_path.c_str(), O_RDONLY);
+  if (rv < 0) {
+    LOG(ERROR) << "[storage] Failed to open file: " << strerror(errno);
+  }
+
+  return rv;
 }
