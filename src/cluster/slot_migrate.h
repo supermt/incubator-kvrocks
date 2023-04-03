@@ -138,6 +138,7 @@ class SlotMigrate : public Redis::Database {
 
   Status AuthDstServer(int sock_fd, const std::string &password);
   Status SetDstImportStatus(int sock_fd, int status);
+  Status SetDstImportStatus(int sock_fd, int status, int slot);
   Status CheckResponseOnce(int sock_fd);
   Status CheckResponseWithCounts(int sock_fd, int total);
 
@@ -213,7 +214,7 @@ class CompactAndMergeMigrate : public SlotMigrate {
  public:
   explicit CompactAndMergeMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
                                   int pipeline_size_limit = kDefaultPipelineSizeLimit,
-                                  int seq_gap = kDefaultSeqGapLimit, bool batched = false);
+                                  int seq_gap = kDefaultSeqGapLimit, bool batched = true);
   Status SetMigrationSlots(std::vector<int> &target_slots) override;
 
   std::string GetName() override { return "compact-and-merge"; }

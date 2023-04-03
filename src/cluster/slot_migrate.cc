@@ -273,22 +273,8 @@ Status SlotMigrate::Start() {
       return s.Prefixed("failed to authenticate on destination node");
     }
   }
-
   // Set destination node import status to START
-  Status s;
-  if (this->IsBatched() && slot_job_->slots_.size() > 0) {
-    for (auto slot : migrate_slots_) {
-      s = SetDstImportStatus(slot, kImportStart);
-      if (!s.IsOK()) {
-        return s.Prefixed(errFailedToSetImportStatus);
-      }
-    }
-  } else {
-    s = SetDstImportStatus(slot_job_->slot_fd_, kImportStart);
-    if (!s.IsOK()) {
-      return s.Prefixed(errFailedToSetImportStatus);
-    }
-  }
+  Status s = SetDstImportStatus(slot_job_->slot_fd_, kImportStart);
 
   LOG(INFO) << "[migrate] Start migrating slot " << migrate_slot_ << ", connect destination fd " << slot_job_->slot_fd_;
   return Status::OK();
@@ -387,6 +373,7 @@ Status SlotMigrate::Success() {
   }
 
   // Set import status on the destination node to SUCCESS
+
   auto s = SetDstImportStatus(slot_job_->slot_fd_, kImportSuccess);
   if (!s.IsOK()) {
     return s.Prefixed(errFailedToSetImportStatus);
@@ -449,11 +436,10 @@ Status SlotMigrate::AuthDstServer(int sock_fd, const std::string &password) {
   return Status::OK();
 }
 
-Status SlotMigrate::SetDstImportStatus(int sock_fd, int status) {
+Status SlotMigrate::SetDstImportStatus(int sock_fd, int status, int slot) {
   if (sock_fd <= 0) return {Status::NotOK, "invalid socket descriptor"};
 
-  std::string cmd =
-      Redis::MultiBulkString({"cluster", "import", std::to_string(migrate_slot_), std::to_string(status)});
+  std::string cmd = Redis::MultiBulkString({"cluster", "import", std::to_string(slot), std::to_string(status)});
   auto s = Util::SockSend(sock_fd, cmd);
   if (!s.IsOK()) {
     return s.Prefixed("failed to send command to the destination node");
@@ -1131,4 +1117,18 @@ int SlotMigrate::OpenDataFile(const std::string &repl_file, uint64_t *file_size)
   }
 
   return rv;
+}
+Status SlotMigrate::SetDstImportStatus(int sock_fd, int status) {
+  Status s;
+  if (IsBatched() && migrate_slots_.size() > 1) {
+    for (auto slot : migrate_slots_) {
+      s = SetDstImportStatus(sock_fd, status, slot);
+      if (!s.IsOK()) {
+        return s;
+      }
+    }
+  } else {
+    s = SetDstImportStatus(sock_fd, status, migrate_slot_);
+  }
+  return s;
 }
