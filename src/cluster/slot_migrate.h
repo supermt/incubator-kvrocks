@@ -100,7 +100,7 @@ class SlotMigrate : public Redis::Database {
   SlotMigrate(const SlotMigrate &other) = delete;
   SlotMigrate &operator=(const SlotMigrate &other) = delete;
   ~SlotMigrate();
-
+  virtual std::string GetName() { return "seek-and-insert"; }
   Status CreateMigrateHandleThread();
   void Loop();
   Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int slot,
@@ -216,6 +216,7 @@ class CompactAndMergeMigrate : public SlotMigrate {
                                   int seq_gap = kDefaultSeqGapLimit, bool batched = false);
   Status SetMigrationSlots(std::vector<int> &target_slots) override;
 
+  std::string GetName() override { return "compact-and-merge"; }
   Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int seq_gap,
                       bool join) override;
 

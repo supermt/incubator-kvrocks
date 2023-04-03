@@ -72,7 +72,6 @@ Server::Server(Engine::Storage *storage, Config *config)
     }
   }
 #endif
-
   // Init cluster
   cluster_ = std::make_unique<Cluster>(this, config_->binds, config_->port);
 
@@ -145,47 +144,10 @@ Status Server::Start() {
       return s.Prefixed("failed to shift replication id");
     }
   }
-
-  if (config_->cluster_enabled && config_->persist_cluster_nodes_enabled) {
-    auto s = cluster_->LoadClusterNodes(config_->NodesFilePath());
-    if (!s.IsOK()) {
-      return s.Prefixed("failed to load cluster nodes info");
-    }
-    // Create objects used for slot migration
-    switch (config_->migrate_method) {
-      case kSeekAndInsert: {
-        slot_migrate_ =
-            std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
-        break;
-      }
-      case kSeekAndInsertBatched: {
-        this->migration_pool_ = std::make_unique<ThreadPool>(config_->max_bg_migration);
-        break;
-      }
-      case kCompactAndMerge: {
-        this->slot_migrate_ = std::make_unique<CompactAndMergeMigrate>(
-            this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap, true);
-      }
-      case kLevelMigration: {
-        this->slot_migrate_ = std::make_unique<LevelMigrate>(this, config_->migrate_speed, config_->pipeline_size,
-                                                             config_->sequence_gap, true);
-        this->migration_pool_ = std::make_unique<ThreadPool>(config_->max_bg_migration);
-      }
-      default:
-        return {Status::NotOK, "Current Migration method is not supported"};
-    }
-
-    slot_migrate_ =
-        std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
-
-    slot_import_ = std::make_unique<SlotImport>(this);
-    // Create migrating thread
-    s = slot_migrate_->CreateMigrateHandleThread();
-    if (!s.IsOK()) {
-      return s.Prefixed("failed to create migration thread");
-    }
+  auto s = ChooseMigrationMethod();
+  if (!s.IsOK()) {
+    return s;
   }
-
   for (const auto &worker : worker_threads_) {
     worker->Start();
   }
@@ -1756,6 +1718,47 @@ void Server::ResetWatchedKeys(Redis::Connection *conn) {
     conn->watched_keys_modified_ = false;
     watched_key_size_ = watched_key_map_.size();
   }
+}
+Status Server::ChooseMigrationMethod() {
+  if (config_->cluster_enabled && config_->persist_cluster_nodes_enabled) {
+    auto s = cluster_->LoadClusterNodes(config_->NodesFilePath());
+    if (!s.IsOK()) {
+      return s.Prefixed("failed to load cluster nodes info");
+    }
+    // Create objects used for slot migration
+    switch (config_->migrate_method) {
+      case kSeekAndInsert: {
+        slot_migrate_ =
+            std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
+        break;
+      }
+      case kSeekAndInsertBatched: {
+        this->migration_pool_ = std::make_unique<ThreadPool>(config_->max_bg_migration);
+        break;
+      }
+      case kCompactAndMerge: {
+        this->slot_migrate_ = std::make_unique<CompactAndMergeMigrate>(
+            this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap, true);
+        break;
+      }
+      case kLevelMigration: {
+        this->slot_migrate_ = std::make_unique<LevelMigrate>(this, config_->migrate_speed, config_->pipeline_size,
+                                                             config_->sequence_gap, true);
+        this->migration_pool_ = std::make_unique<ThreadPool>(config_->max_bg_migration);
+        break;
+      }
+      default:
+        return {Status::NotOK, "Current Migration method is not supported"};
+    }
+
+    slot_import_ = std::make_unique<SlotImport>(this);
+    // Create migrating thread
+    s = slot_migrate_->CreateMigrateHandleThread();
+    if (!s.IsOK()) {
+      return s.Prefixed("failed to create migration thread");
+    }
+  }
+  return Status::OK();
 }
 // Status Server::PerformMigrationOnce(Server *svr) {
 //   std::unique_ptr<SlotMigrate> migrate = std::make_unique<SlotMigrate>(

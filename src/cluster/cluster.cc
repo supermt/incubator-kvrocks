@@ -182,6 +182,9 @@ Status Cluster::SetClusterNodes(const std::string &nodes_str, int64_t version, b
   std::unordered_map<int, std::string> slots_nodes;
   Status s = ParseClusterNodes(nodes_str, &nodes, &slots_nodes);
   if (!s.IsOK()) return s;
+  s = svr_->ChooseMigrationMethod();
+  std::cout << "function: SetClusterNodes " << svr_->slot_migrate_->GetName() << std::endl;
+  if (!s.IsOK()) return s;
 
   // Update version and cluster topology
   version_ = version;
@@ -866,7 +869,8 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
     }
     case kCompactAndMerge:
     case kLevelMigration: {
-      // TODO: For migration, you need to
+      // strange bug, this server can not get the selected migration method
+      std::cout << "function: Migrate " << this->svr_->slot_migrate_->GetName() << std::endl;
       s = this->svr_->slot_migrate_->SetMigrationSlots(slots);
       if (!s.IsOK()) return s;
       s = svr_->slot_migrate_->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, svr_->GetConfig()->sequence_gap,

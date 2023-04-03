@@ -124,6 +124,7 @@ class Server {
   Server &operator=(const Server &) = delete;
 
   Status Start();
+  Status ChooseMigrationMethod();
   void Stop();
   void Join();
   bool IsStopped() { return stop_; }
