@@ -44,7 +44,13 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   rocksdb::CompactionOptions co;
   co.compression = options.compression;
   co.max_subcompactions = svr_->GetConfig()->max_bg_migration;
-  auto rocks_s = storage_->GetDB()->CompactFiles(co, pending_compact_ssts_, options.num_levels, -1, &compact_results);
+  storage_->GetDB()->PauseBackgroundWork();
+  auto rocks_s = storage_->GetDB()->CompactFiles(co, GetSubkeyCFH(), subkey_compact_sst, options.num_levels - 1, -1,
+                                                 &compact_results);
+
+  rocks_s = storage_->GetDB()->CompactFiles(co, GetMetadataCFH(), meta_compact_sst, options.num_levels - 1, -1,
+                                            &compact_results);
+  storage_->GetDB()->ContinueBackgroundWork();
   if (!rocks_s.ok()) {
     return {Status::NotOK, rocks_s.ToString()};
   }
@@ -152,6 +158,12 @@ inline int compare_with_prefix(const std::string &x, rocksdb::Slice &prefix) {
   rocksdb::Slice x_slice(x);
   return memcmp(x_slice.data_, prefix.data_, prefix.size_);
 }
+inline std::vector<std::string> UniqueVector(std::vector<std::string> &input) {
+  std::sort(input.begin(), input.end());
+  auto pos = std::unique(input.begin(), input.end());
+  input.erase(pos, input.end());
+  return input;
+}
 Status CompactAndMergeMigrate::PickSSTs() {
   std::vector<rocksdb::Slice> slot_prefix_list;
   rocksdb::ReadOptions read_options;
@@ -172,7 +184,7 @@ Status CompactAndMergeMigrate::PickSSTs() {
       for (auto prefix : slot_prefix_list) {
         if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
             compare_with_prefix(sst_info.largestkey, prefix) > 0)
-          pending_compact_ssts_.push_back(sst_info.relative_filename);
+          meta_compact_sst.push_back(sst_info.relative_filename);
       }
     }
   }
@@ -181,13 +193,12 @@ Status CompactAndMergeMigrate::PickSSTs() {
   compact_ptr->GetColumnFamilyMetaData(GetSubkeyCFH(), &subkeycf_ssts);
   for (const auto &level_stat : subkeycf_ssts.levels) {
     for (const auto &sst_info : level_stat.files) {
-      pending_compact_ssts_.push_back(sst_info.relative_filename);
+      subkey_compact_sst.push_back(sst_info.relative_filename);
     }
   }
   // Erase redundant SSTs
-  std::sort(pending_compact_ssts_.begin(), pending_compact_ssts_.end());
-  auto pos = std::unique(pending_compact_ssts_.begin(), pending_compact_ssts_.end());
-  pending_compact_ssts_.erase(pos, pending_compact_ssts_.end());
+  meta_compact_sst = UniqueVector(meta_compact_sst);
+  subkey_compact_sst = UniqueVector(subkey_compact_sst);
 
   return Status::OK();
 }

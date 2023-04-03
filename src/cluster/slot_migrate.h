@@ -225,7 +225,8 @@ class CompactAndMergeMigrate : public SlotMigrate {
   Status SendRemoteSST();
   std::vector<std::string> compact_results;
   std::vector<rocksdb::ColumnFamilyDescriptor> cf_desc_;
-  std::vector<std::string> pending_compact_ssts_;
+  std::vector<std::string> subkey_compact_sst;
+  std::vector<std::string> meta_compact_sst;
   std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
   void CreateCFHandles();
   rocksdb::DB *compact_ptr;

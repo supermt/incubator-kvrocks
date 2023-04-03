@@ -380,11 +380,19 @@ Status SlotMigrate::Success() {
   }
 
   std::string dst_ip_port = dst_ip_ + ":" + std::to_string(dst_port_);
-  s = svr_->cluster_->SetSlotMigrated(migrate_slot_, dst_ip_port);
+  if (IsBatched() && migrate_slots_.size() > 1) {
+    for (auto slot : migrate_slots_) {
+      s = svr_->cluster_->SetSlotMigrated(slot, dst_ip_port);
+      if (!s.IsOK()) return s.Prefixed(fmt::format("failed to set slot {} as migrated to {}", slot, dst_ip_port));
+    }
+  } else {
+    s = svr_->cluster_->SetSlotMigrated(migrate_slot_, dst_ip_port);
+  }
   if (!s.IsOK()) {
     return s.Prefixed(fmt::format("failed to set slot {} as migrated to {}", migrate_slot_, dst_ip_port));
   }
 
+  migrate_slots_.clear();
   migrate_failed_slot_ = -1;
 
   return Status::OK();
@@ -400,7 +408,7 @@ Status SlotMigrate::Fail() {
   if (!s.IsOK()) {
     return s.Prefixed(errFailedToSetImportStatus);
   }
-
+  migrate_slots_.clear();
   return Status::OK();
 }
 
