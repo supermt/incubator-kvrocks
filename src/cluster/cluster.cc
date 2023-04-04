@@ -28,9 +28,12 @@
 #include <memory>
 
 #include "commands/commander.h"
+#include "event_util.h"
 #include "fmt/format.h"
+#include "io_util.h"
 #include "parse_util.h"
 #include "replication.h"
+#include "rocksdb_crc32c.h"
 #include "server/server.h"
 #include "string_util.h"
 #include "time_util.h"
@@ -849,7 +852,7 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
 
   Status s;
   auto dst = nodes_[dst_node_id];
-  std::vector<std::future<Status> > results;
+  std::vector<std::future<Status>> results;
   switch (svr_->GetConfig()->migrate_method) {
     case kSeekAndInsert: {
       return {Status::NotOK, "This migration method does not support multi-slot migration"};
@@ -916,5 +919,161 @@ Status Cluster::ValidateMigrateSlot(int slot, const std::string &dst_node_id) {
   if (nodes_[dst_node_id] == myself_) {
     return {Status::NotOK, "Can't migrate slot to myself"};
   }
+  return Status::OK();
+}
+int Cluster::OpenDataFileForMigrate(const std::string &repl_file, uint64_t *file_size) {
+  return svr_->slot_migrate_->OpenDataFile(repl_file, file_size);
+}
+Status Cluster::IngestFiles(const std::string &column_family, std::vector<std::string> &files) {
+  auto cfh = svr_->storage_->GetCFHandle(column_family);
+  rocksdb::IngestExternalFileOptions ing_options;
+  ing_options.allow_blocking_flush = false;
+  auto start_ms = Util::GetTimeStampMS();
+  auto rocks_s = svr_->storage_->GetDB()->IngestExternalFile(cfh, files, ing_options);
+  auto end_ms = Util::GetTimeStampMS();
+
+  if (rocks_s.ok()) {
+    LOG(INFO) << "Ingestion completed, time(ms) take: " << end_ms - start_ms;
+    return Status::OK();
+  }
+  return Status::OK();
+}
+Status Cluster::FetchFileFromRemote(const std::string &ip, const int port, std::vector<std::string> &file_list,
+                                    const std::string &temp_dir) {
+  size_t concurrency = 1;
+  if (file_list.size() > 20) {
+    // Use 4 threads to download files in parallel
+    concurrency = 4;
+  }
+  std::atomic<uint32_t> fetch_cnt = {0};
+  std::atomic<uint32_t> skip_cnt = {0};
+  std::vector<std::future<Status>> results;
+  for (size_t tid = 0; tid < concurrency; ++tid) {
+    results.push_back(
+        std::async(std::launch::async,
+                   [this, temp_dir, &file_list, tid, concurrency, &fetch_cnt, &skip_cnt, ip, port]() -> Status {
+                     int sock_fd = GET_OR_RET(Util::SockConnect(ip, port).Prefixed("connect the server err"));
+                     UniqueFD unique_fd{sock_fd};
+                     auto s = this->svr_->slot_migrate_->SendAuth(sock_fd);
+                     if (!s.IsOK()) {
+                       return s.Prefixed("send the auth command err");
+                     }
+                     std::vector<std::string> fetch_files;
+                     for (auto f_idx = tid; f_idx < file_list.size(); f_idx += concurrency) {
+                       const auto &f_name = file_list[f_idx];
+
+                       fetch_files.push_back(f_name);
+                     }
+                     unsigned files_count = file_list.size();
+                     fetch_file_callback fn = [&fetch_cnt, &skip_cnt, files_count](const std::string &fetch_file,
+                                                                                   const uint32_t fetch_crc) {
+                       fetch_cnt.fetch_add(1);
+                       uint32_t cur_skip_cnt = skip_cnt.load();
+                       uint32_t cur_fetch_cnt = fetch_cnt.load();
+                       LOG(INFO) << "[fetch] "
+                                 << "Fetched " << fetch_file << ", crc32: " << fetch_crc
+                                 << ", skip count: " << cur_skip_cnt << ", fetch count: " << cur_fetch_cnt
+                                 << ", progress: " << cur_skip_cnt + cur_fetch_cnt << "/" << files_count;
+                     };
+
+                     if (!fetch_files.empty()) {
+                       s = this->fetchFiles(sock_fd, temp_dir, fetch_files, fn);
+                     }
+                     return s;
+                   }));
+  }
+
+  // Wait til finish
+  for (auto &f : results) {
+    Status s = f.get();
+    if (!s.IsOK()) return s;
+  }
+  return Status::OK();
+}
+
+Status Cluster::fetchFiles(int sock_fd, const std::string &dir, const std::vector<std::string> &files,
+                           const fetch_file_callback &fn) {
+  std::string files_str;
+  for (const auto &file : files) {
+    files_str += file;
+    files_str.push_back(',');
+  }
+  files_str.pop_back();
+
+  const auto fetch_command = Redis::MultiBulkString({"fetch_remote_sst", files_str});
+  auto s = Util::SockSend(sock_fd, fetch_command);
+  if (!s.IsOK()) return s.Prefixed("send fetch file command");
+
+  UniqueEvbuf evbuf;
+  for (const auto &file : files) {
+    DLOG(INFO) << "[fetch] Start to fetch file " << file;
+    s = fetchFile(sock_fd, evbuf.get(), dir, file, 0, fn);
+    if (!s.IsOK()) {
+      s = Status(Status::NotOK, "fetch file err: " + s.Msg());
+      LOG(WARNING) << "[fetch] Fail to fetch file " << file << ", err: " << s.Msg();
+      break;
+    }
+    DLOG(INFO) << "[fetch] Succeed fetching file " << file;
+
+    // Just for tests
+    if (svr_->GetConfig()->fullsync_recv_file_delay) {
+      sleep(svr_->GetConfig()->fullsync_recv_file_delay);
+    }
+  }
+  return s;
+}
+Status Cluster::fetchFile(int sock_fd, evbuffer *evbuf, const std::string &dir, const std::string &file, uint32_t crc,
+                          const std::function<void(const std::string, const uint32_t)> &fn) {
+  size_t file_size = 0;
+
+  // Read file size line
+  while (true) {
+    UniqueEvbufReadln line(evbuf, EVBUFFER_EOL_CRLF_STRICT);
+    if (!line) {
+      if (evbuffer_read(evbuf, sock_fd, -1) <= 0) {
+        return {Status::NotOK, fmt::format("read size: {}", strerror(errno))};
+      }
+      continue;
+    }
+    if (line[0] == '-') {
+      std::string msg(line.get());
+      return {Status::NotOK, msg};
+    }
+    file_size = line.length > 0 ? std::strtoull(line.get(), nullptr, 10) : 0;
+    break;
+  }
+
+  // Write to tmp file
+  auto tmp_file = Engine::Storage::ReplDataManager::NewTmpFile(svr_->storage_, dir, file);
+  if (!tmp_file) {
+    return {Status::NotOK, "unable to create tmp file"};
+  }
+
+  size_t remain = file_size;
+  uint32_t tmp_crc = 0;
+  char data[16 * 1024];
+  while (remain != 0) {
+    if (evbuffer_get_length(evbuf) > 0) {
+      auto data_len = evbuffer_remove(evbuf, data, remain > 16 * 1024 ? 16 * 1024 : remain);
+      if (data_len == 0) continue;
+      if (data_len < 0) {
+        return {Status::NotOK, "read sst file data error"};
+      }
+      tmp_file->Append(rocksdb::Slice(data, data_len));
+      tmp_crc = rocksdb::crc32c::Extend(tmp_crc, data, data_len);
+      remain -= data_len;
+    } else {
+      if (evbuffer_read(evbuf, sock_fd, -1) <= 0) {
+        return {Status::NotOK, fmt::format("read sst file: {}", strerror(errno))};
+      }
+    }
+  }
+  // Verify file crc checksum if crc is not 0
+  if (crc && crc != tmp_crc) {
+    return {Status::NotOK, fmt::format("CRC mismatched, {} was expected but got {}", crc, tmp_crc)};
+  }
+
+  // Call fetch file callback function
+  fn(file, crc);
   return Status::OK();
 }

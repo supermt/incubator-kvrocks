@@ -348,6 +348,7 @@ void Config::initFieldCallback() {
          checkpoint_dir = dir + "/checkpoint";
          sync_checkpoint_dir = dir + "/sync_checkpoint";
          backup_sync_dir = dir + "/backup_for_sync";
+         migration_sync_dir = dir + "/migration_sst_park";
          return Status::OK();
        }},
       {"backup-dir",

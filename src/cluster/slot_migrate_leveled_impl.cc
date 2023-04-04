@@ -34,5 +34,64 @@
 #include "types/redis_stream_base.h"
 #include "types/redis_string.h"
 
-LevelMigrate::LevelMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap, bool batched)
+LevelMigrate::LevelMigrate(Server* svr, int migration_speed, int pipeline_size_limit, int seq_gap, bool batched)
     : CompactAndMergeMigrate(svr, migration_speed, pipeline_size_limit, seq_gap, batched) {}
+Status LevelMigrate::SendSnapshot() {
+  // For each level, pick the SSTs
+
+  compact_ptr->GetColumnFamilyMetaData(GetMetadataCFH(), &metacf_level_stats);
+  for (int i = 0; i < storage_->GetDB()->GetOptions().num_levels; i++) {
+    auto s = PickSSTForLevel(i);
+    if (!s.IsOK()) {
+      return s;
+    }
+
+    s = SendRemoteSST();
+    if (s.IsOK()) {
+      return s;
+    }
+    LOG(INFO) << "Successfully send SSTS at level: " << i << ". # of Meta SSTs: " << pend_sending_sst_meta.size()
+              << ". # of Subkey SSTs: " << pend_sending_sst_subkey.size();
+  }
+  return Status::OK();
+}
+
+Status LevelMigrate::PickSSTForLevel(int level) {
+  auto meta_level = metacf_level_stats.levels[level];
+  auto subkey_level = subkey_stats.levels[level];
+  pend_sending_sst_meta.clear();
+
+  for (auto slot_prefix : slot_prefix_list_) {
+    for (const auto& file : meta_level.files) {
+      // Search through the meta sst list
+      if (compare_with_prefix(file.smallestkey, slot_prefix) < 0 &&
+          compare_with_prefix(file.largestkey, slot_prefix) > 0) {
+        pend_sending_sst_meta.push_back(file.relative_filename);
+      }
+    }
+  }
+
+  for (auto subkey_prefix : subkey_prefix_list_) {
+    for (const auto& file : subkey_level.files) {
+      if (compare_with_prefix(file.smallestkey, subkey_prefix) < 0 &&
+          compare_with_prefix(file.largestkey, subkey_prefix) > 0) {
+        pend_sending_sst_subkey.push_back(file.relative_filename);
+      }
+    }
+  }
+
+  return Status::OK();
+}
+Status LevelMigrate::SendRemoteSST() {
+  auto s = CompactAndMergeMigrate::SendRemoteSST(pend_sending_sst_meta, Engine::kMetadataColumnFamilyName);
+  if (s.IsOK()) {
+    LOG(ERROR) << "Meta SSTs sending error";
+    return s;
+  }
+  s = CompactAndMergeMigrate::SendRemoteSST(pend_sending_sst_subkey, Engine::kSubkeyColumnFamilyName);
+  if (s.IsOK()) {
+    LOG(ERROR) << "Subkey SSTs sending error";
+    return s;
+  }
+  return s;
+}

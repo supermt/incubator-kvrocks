@@ -86,6 +86,15 @@ class Cluster {
   int64_t GetVersion() const { return version_; }
   static bool IsValidSlot(int slot) { return slot >= 0 && slot < kClusterSlots; }
   bool IsNotMaster();
+  int OpenDataFileForMigrate(const std::string &remote_file_name, uint64_t *file_size);
+
+  Status fetchFile(int sock_fd, evbuffer *evbuf, const std::string &dir, const std::string &file, uint32_t crc,
+                   const std::function<void(const std::string, const uint32_t)> &fn);
+  Status fetchFiles(int sock_fd, const std::string &dir, const std::vector<std::string> &files,
+                    const std::function<void(const std::string, const uint32_t)> &fn);
+  Status FetchFileFromRemote(const std::string &ip, const int port, std::vector<std::string> &file_list,
+                             const std::string &temp_dir);
+  Status IngestFiles(const std::string &column_family, std::vector<std::string> &files);
   bool IsWriteForbiddenSlot(int slot);
   Status CanExecByMySelf(const Redis::CommandAttributes *attributes, const std::vector<std::string> &cmd_tokens,
                          Redis::Connection *conn);

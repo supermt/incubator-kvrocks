@@ -126,6 +126,8 @@ class SlotMigrate : public Redis::Database {
   void GetMigrateInfo(std::string *info) const;
   bool IsTerminated() { return thread_state_ == ThreadState::Terminated; }
   bool IsBatched() { return batched_; }
+  int OpenDataFile(const std::string &repl_file, uint64_t *file_size);
+  Status SendAuth(int target_fd);
 
  protected:
   void RunStateMachine();
@@ -157,8 +159,6 @@ class SlotMigrate : public Redis::Database {
   Status SyncWalBeforeForbidSlot();
   Status SyncWalAfterForbidSlot();
   void SetForbiddenSlot(int16_t slot);
-  int OpenDataFile(const std::string &repl_file, uint64_t *file_size);
-
   enum class ParserState { ArrayLen, BulkLen, BulkData, OneRspEnd };
   enum class ThreadState { Uninitialized, Running, Terminated };
 
@@ -221,21 +221,29 @@ class CompactAndMergeMigrate : public SlotMigrate {
   Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int seq_gap,
                       bool join) override;
 
+  inline int compare_with_prefix(const std::string &x, rocksdb::Slice &prefix) {
+    rocksdb::Slice x_slice(x);
+    return memcmp(x_slice.data_, prefix.data_, prefix.size_);
+  }
+
  private:
-  Status SendRemoteSST();
   std::vector<std::string> compact_results;
   std::vector<rocksdb::ColumnFamilyDescriptor> cf_desc_;
   std::vector<std::string> subkey_compact_sst;
   std::vector<std::string> meta_compact_sst;
   std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
   void CreateCFHandles();
-  rocksdb::DB *compact_ptr;
 
  protected:
   Status SendSnapshot() override;
   Status PickSSTs();
+  std::string ExtractSubkeyPrefix(const Slice &slot_prefix);
   rocksdb::ColumnFamilyHandle *GetMetadataCFH();
   rocksdb::ColumnFamilyHandle *GetSubkeyCFH();
+  Status SendRemoteSST(std::vector<std::string> &file_list, const std::string &column_family);
+  rocksdb::DB *compact_ptr;
+  std::vector<rocksdb::Slice> slot_prefix_list_;
+  std::vector<rocksdb::Slice> subkey_prefix_list_;
 };
 
 class LevelMigrate : public CompactAndMergeMigrate {
@@ -243,4 +251,15 @@ class LevelMigrate : public CompactAndMergeMigrate {
   explicit LevelMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
                         int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit,
                         bool batched = false);
+
+ protected:
+  Status SendSnapshot() override;
+  Status PickSSTForLevel(int level);
+  Status SendRemoteSST();
+
+ private:
+  rocksdb::ColumnFamilyMetaData metacf_level_stats;
+  rocksdb::ColumnFamilyMetaData subkey_stats;
+  std::vector<std::string> pend_sending_sst_meta;
+  std::vector<std::string> pend_sending_sst_subkey;
 };

@@ -124,6 +124,7 @@ struct Config {
   std::string db_dir;
   std::string backup_dir;  // GUARD_BY(backup_mu_)
   std::string backup_sync_dir;
+  std::string migration_sync_dir;
   std::string checkpoint_dir;
   std::string sync_checkpoint_dir;
   std::string log_dir;

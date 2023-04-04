@@ -21,6 +21,10 @@
 #include "cluster/slot_import.h"
 #include "commander.h"
 #include "error_constants.h"
+#include "io_util.h"
+#include "scope_exit.h"
+#include "thread_util.h"
+#include "time_util.h"
 
 namespace Redis {
 
@@ -120,6 +124,107 @@ class CommandCluster : public Commander {
   int64_t slot_ = -1;
   ImportStatus state_ = kImportNone;
   bool batched_import = false;
+};
+class CommandIngest : public Commander {
+ public:
+  Status Parse(const std::vector<std::string> &args) override {
+    remote_or_local_ = args[1];
+    column_family_name_ = args[2];
+    files_str_ = args[3];
+    return Status::OK();
+  }
+  Status Execute(Server *svr, Connection *conn, std::string *output) override {
+    std::string target_dir = svr->GetConfig()->backup_sync_dir;
+    std::vector<std::string> files = Util::Split(files_str_, ",");
+    if (remote_or_local_ == "local") {
+      return svr->cluster_->IngestFiles(column_family_name_, files);
+    } else if (remote_or_local_ == "remote") {
+      std::cout << "port in the conn parameter: " << conn->GetPort();
+      auto s = svr->cluster_->FetchFileFromRemote(conn->GetIP(), conn->GetPort(), files,
+                                                  svr->GetConfig()->migration_sync_dir);
+      if (!s.IsOK()) {
+        return s;
+      }
+      s = svr->cluster_->IngestFiles(column_family_name_, files);
+      return s;
+    }
+    return {Status::NotOK, "Failed cmd format, it should be like: ingest remote|local file1,file2,file3"};
+  }
+
+ private:
+  std::string remote_or_local_;
+  std::string files_str_;
+  std::string column_family_name_;
+};
+class CommandSSTFetch : public Commander {
+ public:
+  Status Parse(const std::vector<std::string> &args) override {
+    files_str_ = args[1];
+    return Status::OK();
+  }
+
+  Status Execute(Server *svr, Connection *conn, std::string *output) override {
+    std::vector<std::string> files = Util::Split(files_str_, ",");
+
+    int repl_fd = conn->GetFD();
+    std::string ip = conn->GetAnnounceIP();
+
+    auto s = Util::SockSetBlocking(repl_fd, 1);
+    if (!s.IsOK()) {
+      return s.Prefixed("failed to set blocking mode on socket");
+    }
+
+    conn->NeedNotFreeBufferEvent();  // Feed-replica-file thread will close the replica bufferevent
+    conn->EnableFlag(Redis::Connection::kCloseAsync);
+
+    auto t =
+        GET_OR_RET(Util::CreateThread("feed-migration-SST", [svr, repl_fd, ip, files, bev = conn->GetBufferEvent()]() {
+          auto exit = MakeScopeExit([bev] { bufferevent_free(bev); });
+          svr->IncrFetchFileThread();
+
+          for (const auto &file : files) {
+            if (svr->IsStopped()) break;
+
+            uint64_t file_size = 0;
+            auto fd = UniqueFD(svr->cluster_->OpenDataFileForMigrate(file, &file_size));
+            if (!fd) break;
+
+            // Send file size and content
+            if (Util::SockSend(repl_fd, std::to_string(file_size) + CRLF).IsOK() &&
+                Util::SockSendFile(repl_fd, *fd, file_size).IsOK()) {
+              LOG(INFO) << "[cluster ingestion] Succeed sending file " << file << " to " << ip;
+            } else {
+              LOG(WARNING) << "[cluster ingestion] Fail to send file " << file << " to " << ip
+                           << ", error: " << strerror(errno);
+              break;
+            }
+            fd.Close();
+
+            // No need to sleep in migration
+            //        auto end = std::chrono::high_resolution_clock::now();
+            //        uint64_t duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+            //        auto shortest = static_cast<uint64_t>(static_cast<double>(file_size) /
+            //                                              static_cast<double>(max_replication_bytes) * (1000 * 1000));
+            //        if (max_replication_bytes > 0 && duration < shortest) {
+            //          LOG(INFO) << "[replication] Need to sleep " << (shortest - duration) / 1000
+            //                    << " ms since of sending files too quickly";
+            //          usleep(shortest - duration);
+            //        }
+          }
+          auto now = static_cast<time_t>(Util::GetTimeStamp());
+          svr->storage_->SetCheckpointAccessTime(now);
+          svr->DecrFetchFileThread();
+        }));
+
+    if (auto s = Util::ThreadDetach(t); !s) {
+      return s;
+    }
+
+    return Status::OK();
+  }
+
+ private:
+  std::string files_str_;
 };
 
 class CommandClusterX : public Commander {
@@ -280,6 +385,8 @@ class CommandClusterX : public Commander {
 };
 
 REDIS_REGISTER_COMMANDS(MakeCmdAttr<CommandCluster>("cluster", -2, "cluster no-script", 0, 0, 0),
-                        MakeCmdAttr<CommandClusterX>("clusterx", -2, "cluster no-script", 0, 0, 0), )
+                        MakeCmdAttr<CommandClusterX>("clusterx", -2, "cluster no-script", 0, 0, 0),
+                        MakeCmdAttr<CommandIngest>("ingest", 4, "cluster no-script", 1, 1, 1),
+                        MakeCmdAttr<CommandSSTFetch>("fetch_remote_sst", 2, "cluster no-script", 0, 0, 0), )
 
 }  // namespace Redis

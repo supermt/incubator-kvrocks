@@ -1140,3 +1140,16 @@ Status SlotMigrate::SetDstImportStatus(int sock_fd, int status) {
   }
   return s;
 }
+Status SlotMigrate::SendAuth(int target_fd) {
+  {
+    Status s;
+    std::string pass = svr_->GetConfig()->requirepass;
+    if (!pass.empty()) {
+      s = AuthDstServer(target_fd, pass);
+      if (!s.IsOK()) {
+        return s.Prefixed("failed to authenticate on destination node");
+      }
+    }
+    return s;
+  };
+}
