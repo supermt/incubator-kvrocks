@@ -354,6 +354,11 @@ Status SlotMigrate::SendSnapshot() {
 
 Status SlotMigrate::SyncWal() {
   // Send incremental data in WAL circularly until new increment less than a certain amount
+  if (svr_->GetConfig()->migrate_method > kSeekAndInsertBatched) {
+    LOG(INFO) << "[" << this->GetName() << "], current migration method uses double writing, can skip the WAL syncing";
+    return Status::OK();
+  }
+
   auto s = SyncWalBeforeForbidSlot();
   if (!s.IsOK()) {
     return s.Prefixed("failed to sync WAL before forbidding a slot");
@@ -976,7 +981,7 @@ Status SlotMigrate::MigrateIncrementData(std::unique_ptr<rocksdb::TransactionLog
     // Check whether command pipeline should be sent
     s = SendCmdsPipelineIfNeed(&commands, false);
     if (!s.IsOK()) {
-      LOG(ERROR) << "[migrate] Failed to send WAL commands pipeline";
+      LOG(ERROR) << "[migrate] Failed to send WAL commands pipeline: " << s.Msg();
       return {Status::NotOK};
     }
 

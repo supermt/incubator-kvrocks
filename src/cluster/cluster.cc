@@ -844,11 +844,9 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
              nodes_.find(myself_->master_id_) != nodes_.end() && nodes_[myself_->master_id_] == slots_nodes_[slot]) {
     return Status::OK();  // My master is serving this slot
   } else {
-    LOG(ERROR) << "There are " << myself_->importing_slot_.size() << " slots are migrating";
-    LOG(INFO) << "Is it in the importing?" << myself_->importing_slot_.count(slot) << " slots are migrating";
-
     return {Status::RedisExecErr,
-            fmt::format("default errors: MOVED {} {}:{}", slot, slots_nodes_[slot]->host_, slots_nodes_[slot]->port_)};
+            fmt::format("default errors: MOVED {} {}:{}, in slots or not {}", slot, slots_nodes_[slot]->host_,
+                        slots_nodes_[slot]->port_, myself_->importing_slot_.count(slot))};
   }
 }
 Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_node_id) {
@@ -894,6 +892,9 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
   }
 
   LOG(INFO) << "[cluster migration] Finished slot migration cmds sending, start to set nodes";
+
+  s = SetSlots(slots, dst_node_id);
+  if (!s.IsOK()) return s;
 
   // Migration succeed, set slots.
   return Status::OK();
