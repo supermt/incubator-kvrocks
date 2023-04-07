@@ -189,11 +189,12 @@ void SlotMigrate::RunStateMachine() {
         break;
       }
       case kSlotMigrateSnapshot: {
-        auto s = SendSnapshot();
-        if (s.IsOK()) {
+        auto s = svr_->migration_pool_->enqueue(&SlotMigrate::SendSnapshot, this);
+        //        auto s = SendSnapshot();
+        if (s.get().IsOK()) {
           state_machine_ = kSlotMigrateWal;
         } else {
-          LOG(ERROR) << "[migrate] Failed to send snapshot of slot " << migrate_slot_ << ". Error: " << s.Msg();
+          LOG(ERROR) << "[migrate] Failed to send snapshot of slot " << migrate_slot_ << ". Error: " << s.get().Msg();
           state_machine_ = kSlotMigrateFailed;
         }
         break;
@@ -324,17 +325,17 @@ Status SlotMigrate::SendSnapshot() {
     }
 
     if (*result == KeyMigrationResult::kMigrated) {
-      LOG(INFO) << "[migrate] The key " << user_key << " successfully migrated";
+      //      LOG(INFO) << "[migrate] The key " << user_key << " successfully migrated";
       migrated_key_cnt++;
     } else if (*result == KeyMigrationResult::kExpired) {
-      LOG(INFO) << "[migrate] The key " << user_key << " is expired";
+      //      LOG(INFO) << "[migrate] The key " << user_key << " is expired";
       expired_key_cnt++;
     } else if (*result == KeyMigrationResult::kUnderlyingStructEmpty) {
-      LOG(INFO) << "[migrate] The key " << user_key << " has no elements";
+      //      LOG(INFO) << "[migrate] The key " << user_key << " has no elements";
       empty_key_cnt++;
     } else {
-      LOG(ERROR) << "[migrate] Migrated a key " << user_key << " with unexpected result: " << static_cast<int>(*result);
-      return {Status::NotOK};
+      LOG(ERROR) << "[migrate] Migrated a key " << user_key << " with unexpected result: " << result.Msg();
+      return {Status::NotOK, result.Msg()};
     }
   }
 
@@ -1128,7 +1129,7 @@ int SlotMigrate::OpenDataFile(const std::string &repl_file, uint64_t *file_size)
 }
 Status SlotMigrate::SetDstImportStatus(int sock_fd, int status) {
   Status s;
-  if (IsBatched() && migrate_slots_.size() > 1) {
+  if (migrate_slots_.size() > 1) {
     for (auto slot : migrate_slots_) {
       s = SetDstImportStatus(sock_fd, status, slot);
       if (!s.IsOK()) {

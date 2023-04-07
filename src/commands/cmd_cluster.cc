@@ -276,30 +276,49 @@ class CommandClusterX : public Commander {
     }
 
     // CLUSTERX SETSLOT $SLOT_ID NODE $NODE_ID $VERSION
-    if (subcommand_ == "setslot" && args_.size() == 6) {
-      auto parse_id = ParseInt<int>(args[2].c_str(), 10);
-      if (!parse_id) {
+    // CLUSTERX SETSLOT $SLOT_ID_START $SLOT_ID_END NODE $NODE_ID $VERSION
+
+    if (subcommand_ == "setslot" && (args_.size() == 6 || args_.size() == 7)) {
+      int parse_count = 2;
+      auto start_id = ParseInt<int>(args[parse_count].c_str(), 10);
+      if (!start_id) {
         return {Status::RedisParseErr, errValueNotInteger};
       }
 
-      slot_id_ = *parse_id;
-
+      slot_id_ = *start_id;
       if (!Cluster::IsValidSlot(slot_id_)) {
         return {Status::RedisParseErr, "Invalid slot id"};
       }
 
-      if (strcasecmp(args_[3].c_str(), "node") != 0) {
-        return {Status::RedisParseErr, "Invalid setslot options"};
+      if (args_.size() == 7) {
+        parse_count++;
+        auto end_id = ParseInt<int>(args[parse_count].c_str(), 10);
+        if (!end_id) {
+          return {Status::RedisParseErr, errValueNotInteger};
+        }
+        int end_slot_id = *end_id;
+        if (!Cluster::IsValidSlot(end_slot_id)) {
+          return {Status::RedisParseErr, "Invalid slot id"};
+        }
+        slot_id_ = -1;
+        for (int i = slot_id_; i < end_slot_id; i++) {
+          slots_.push_back(i);
+        }
       }
 
-      if (args_[4].size() != kClusterNodeIdLen) {
+      if (strcasecmp(args_[parse_count].c_str(), "node") != 0) {
+        return {Status::RedisParseErr, "Invalid setslot options"};
+      }
+      parse_count++;
+      if (args_[parse_count].size() != kClusterNodeIdLen) {
         return {Status::RedisParseErr, "Invalid node id"};
       }
 
-      auto parse_version = ParseInt<int64_t>(args[5].c_str(), 10);
+      auto parse_version = ParseInt<int64_t>(args[parse_count].c_str(), 10);
       if (!parse_version) {
         return {Status::RedisParseErr, errValueNotInteger};
       }
+      parse_count++;
 
       if (*parse_version < 0) return {Status::RedisParseErr, "Invalid version"};
 
@@ -340,6 +359,10 @@ class CommandClusterX : public Commander {
         *output = Redis::Error(s.Msg());
       }
     } else if (subcommand_ == "setslot") {
+      if (slot_ == -1 && slots_.size() > 0) {
+        Status s = svr->cluster_->SetSlots(slots_, args_[4]);
+      }
+
       Status s = svr->cluster_->SetSlot(slot_id_, args_[4], set_version_);
       if (s.IsOK()) {
         need_persist_nodes_info = true;

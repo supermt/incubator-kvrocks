@@ -1733,8 +1733,8 @@ Status Server::ChooseMigrationMethod() {
         break;
       }
       case kSeekAndInsertBatched: {
-        slot_migrate_ =
-            std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
+        slot_migrate_ = std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size,
+                                                      config_->sequence_gap, true);
         this->migration_pool_ = std::make_unique<ThreadPool>(config_->max_bg_migration);
         break;
       }

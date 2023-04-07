@@ -343,7 +343,6 @@ Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state, bool cl
 
   switch (state) {
     case kImportStart: {
-    }
       if (clusterd) {
         svr_->slot_import_map.emplace(slot, std::make_unique<SlotImport>(svr_));
         bool start_ok = svr_->slot_import_map[slot]->Start(conn->GetFD(), slot);
@@ -352,7 +351,7 @@ Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state, bool cl
         }
 
         conn->SetImporting();
-        myself_->importing_slot_.push_back(slot);
+        myself_->importing_slot_.emplace(slot);
         conn->close_cb_ = [object_ptr = svr_->slot_import_map[slot].get(), capture_fd = conn->GetFD()](int fd) {
           object_ptr->StopForLinkError(capture_fd);
         };
@@ -363,7 +362,7 @@ Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state, bool cl
 
         // Set link importing
         conn->SetImporting();
-        myself_->importing_slot_.push_back(slot);
+        myself_->importing_slot_.emplace(slot);
         // Set link error callback
         conn->close_cb_ = [object_ptr = svr_->slot_import_.get(), capture_fd = conn->GetFD()](int fd) {
           object_ptr->StopForLinkError(capture_fd);
@@ -374,6 +373,7 @@ Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state, bool cl
       }
 
       break;
+    }
     case kImportSuccess:
       if (clusterd) pImport = svr_->slot_import_map[slot].get();
       if (!pImport->Success(slot)) {
@@ -381,6 +381,7 @@ Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state, bool cl
                    << ", received slot: " << slot << ", current slot: " << svr_->slot_import_->GetSlot();
         return {Status::NotOK, fmt::format("Failed to set slot {} importing success", slot)};
       }
+      myself_->importing_slot_.erase(slot);
 
       LOG(INFO) << "[import] Succeed to import slot " << slot;
       break;
@@ -392,6 +393,7 @@ Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state, bool cl
         return {Status::NotOK, fmt::format("Failed to set slot {} importing error", slot)};
       }
 
+      myself_->importing_slot_.erase(slot);
       LOG(INFO) << "[import] Failed to import slot " << slot;
       break;
     default:
@@ -492,7 +494,7 @@ SlotInfo Cluster::GenSlotNodeInfo(int start, int end, const std::shared_ptr<Clus
   std::vector<SlotInfo::NodeInfo> vn;
   vn.push_back({n->host_, n->port_, n->id_});  // itself
 
-  for (const auto &id : n->replicas) {  // replicas
+  for (const auto &id : n->replicas) {         // replicas
     if (nodes_.find(id) == nodes_.end()) continue;
     vn.push_back({nodes_[id]->host_, nodes_[id]->port_, nodes_[id]->id_});
   }
@@ -815,7 +817,7 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
     // Server can't change the topology directly, so we record the migrated slots
     // to move the requests of the migrated slots to the destination node.
     if (migrated_slots_.count(slot) > 0) {  // I'm not serving the migrated slot
-      return {Status::RedisExecErr, fmt::format("MOVED {} {}", slot, migrated_slots_[slot])};
+      return {Status::RedisExecErr, fmt::format("Slot is migrated: MOVED {} {}", slot, migrated_slots_[slot])};
     }
     // To keep data consistency, slot will be forbidden write while sending the last incremental data.
     // During this phase, the requests of the migrating slot has to be rejected.
@@ -825,8 +827,7 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
 
     return Status::OK();  // I'm serving this slot
   } else if (myself_ &&
-             std::find(myself_->importing_slot_.begin(), myself_->importing_slot_.end(), slot) !=
-                 myself_->importing_slot_.end()
+             myself_->importing_slot_.count(slot)
              //             myself_->importing_slot_ == slot
              && conn->IsImporting()) {
     // While data migrating, the topology of the destination node has not been changed.
@@ -843,8 +844,11 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
              nodes_.find(myself_->master_id_) != nodes_.end() && nodes_[myself_->master_id_] == slots_nodes_[slot]) {
     return Status::OK();  // My master is serving this slot
   } else {
+    LOG(ERROR) << "There are " << myself_->importing_slot_.size() << " slots are migrating";
+    LOG(INFO) << "Is it in the importing?" << myself_->importing_slot_.count(slot) << " slots are migrating";
+
     return {Status::RedisExecErr,
-            fmt::format("MOVED {} {}:{}", slot, slots_nodes_[slot]->host_, slots_nodes_[slot]->port_)};
+            fmt::format("default errors: MOVED {} {}:{}", slot, slots_nodes_[slot]->host_, slots_nodes_[slot]->port_)};
   }
 }
 Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_node_id) {
@@ -859,15 +863,19 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
     }
     case kSeekAndInsertBatched: {
       for (int slot : slots) {
-        results.emplace_back(svr_->migration_pool_->enqueue(&Cluster::MigrateSlot, this, slot, dst_node_id));
-      }
-      for (auto &&result : results) {
-        Status mg_status = result.get();
-        LOG(INFO) << mg_status.GetCode() << mg_status.Msg();
-        if (!mg_status.IsOK()) {
-          return mg_status;
+        //        results.emplace_back(svr_->migration_pool_->enqueue(&Cluster::MigrateSlot, this, slot, dst_node_id));
+        s = MigrateSlot(slot, dst_node_id);
+        if (!s.IsOK()) {
+          return s;
         }
       }
+      //      for (auto &&result : results) {
+      //        Status mg_status = result.get();
+      //        LOG(INFO) << mg_status.GetCode() << mg_status.Msg();
+      //        if (!mg_status.IsOK()) {
+      //          return mg_status;
+      //        }
+      //      }
       break;
     }
     case kCompactAndMerge:
@@ -888,11 +896,6 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
   LOG(INFO) << "[cluster migration] Finished slot migration cmds sending, start to set nodes";
 
   // Migration succeed, set slots.
-  for (int slot : slots) {
-    s = SetSlot(slot, dst_node_id, version_ + 1);
-    if (!s.IsOK()) return s;
-  }
-
   return Status::OK();
 }
 Status Cluster::ValidateMigrateSlot(int slot, const std::string &dst_node_id) {
@@ -1076,4 +1079,14 @@ Status Cluster::fetchFile(int sock_fd, evbuffer *evbuf, const std::string &dir, 
   // Call fetch file callback function
   fn(file, crc);
   return Status::OK();
+}
+Status Cluster::SetSlots(const std::vector<int> &slots, const std::string &node_id) {
+  Status s;
+  for (int slot : slots) {
+    s = SetSlot(slot, node_id, version_ + 1);
+    if (!s.IsOK()) {
+      return s;
+    }
+  }
+  return s;
 }

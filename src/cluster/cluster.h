@@ -54,7 +54,7 @@ class ClusterNode {
   std::string slots_info_;
   std::bitset<kClusterSlots> slots_;
   std::vector<std::string> replicas;
-  std::vector<int> importing_slot_;
+  std::set<int> importing_slot_;
 };
 
 struct SlotInfo {
@@ -79,6 +79,7 @@ class Cluster {
   Status GetClusterNodes(std::string *nodes_str);
   Status SetNodeId(const std::string &node_id);
   Status SetSlot(int slot, const std::string &node_id, int64_t version);
+  Status SetSlots(const std::vector<int>& slot, const std::string &node_id);
   Status SetSlotMigrated(int slot, const std::string &ip_port);
   Status SetSlotImported(int slot);
   Status GetSlotsInfo(std::vector<SlotInfo> *slot_infos);
