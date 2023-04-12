@@ -38,40 +38,59 @@ LevelMigrate::LevelMigrate(Server* svr, int migration_speed, int pipeline_size_l
     : CompactAndMergeMigrate(svr, migration_speed, pipeline_size_limit, seq_gap, batched) {}
 Status LevelMigrate::SendSnapshot() {
   // For each level, pick the SSTs
-
   compact_ptr->GetColumnFamilyMetaData(GetMetadataCFH(), &metacf_level_stats);
-  for (int i = 0; i < storage_->GetDB()->GetOptions().num_levels; i++) {
-    auto s = PickSSTForLevel(i);
+  compact_ptr->GetColumnFamilyMetaData(GetSubkeyCFH(), &subkey_stats);
+  LOG(INFO) << "meta level: " << metacf_level_stats.levels.size() << " subkey level: " << subkey_stats.size;
+  for (uint32_t i = 0; i < metacf_level_stats.levels.size(); i++) {
+    auto s = PickMetaSSTForLevel(i);
     if (!s.IsOK()) {
       return s;
     }
 
     s = SendRemoteSST();
-    if (s.IsOK()) {
+    if (!s.IsOK()) {
       return s;
     }
-    LOG(INFO) << "Successfully send SSTS at level: " << i << ". # of Meta SSTs: " << pend_sending_sst_meta.size()
-              << ". # of Subkey SSTs: " << pend_sending_sst_subkey.size();
   }
+
+  for (uint32_t i = 0; i < subkey_stats.levels.size(); i++) {
+    auto s = PickSubkeySSTForLevel(i);
+    if (!s.IsOK()) {
+      return s;
+    }
+
+    s = SendRemoteSST();
+    if (!s.IsOK()) {
+      return s;
+    }
+  }
+
   return Status::OK();
 }
 
-Status LevelMigrate::PickSSTForLevel(int level) {
-  auto meta_level = metacf_level_stats.levels[level];
-  auto subkey_level = subkey_stats.levels[level];
-  pend_sending_sst_meta.clear();
-
-  for (auto slot_prefix : slot_prefix_list_) {
-    for (const auto& file : meta_level.files) {
-      // Search through the meta sst list
-      if (compare_with_prefix(file.smallestkey, slot_prefix) < 0 &&
-          compare_with_prefix(file.largestkey, slot_prefix) > 0) {
-        pend_sending_sst_meta.push_back(file.relative_filename);
-      }
+Status LevelMigrate::SendRemoteSST() {
+  if (pend_sending_sst_meta.size() > 0) {
+    auto s = CompactAndMergeMigrate::SendRemoteSST(pend_sending_sst_meta, Engine::kMetadataColumnFamilyName);
+    if (s.IsOK()) {
+      LOG(ERROR) << "Meta SSTs sending error";
+      return s;
     }
   }
 
-  for (auto subkey_prefix : subkey_prefix_list_) {
+  if (pend_sending_sst_subkey.size() > 0) {
+    auto s = CompactAndMergeMigrate::SendRemoteSST(pend_sending_sst_subkey, Engine::kSubkeyColumnFamilyName);
+    if (s.IsOK()) {
+      LOG(ERROR) << "Subkey SSTs sending error";
+      return s;
+    }
+  }
+
+  return Status::OK();
+}
+
+Status LevelMigrate::PickSubkeySSTForLevel(int level) {
+  auto subkey_level = subkey_stats.levels[level];
+  for (Slice subkey_prefix : subkey_prefix_list_) {
     for (const auto& file : subkey_level.files) {
       if (compare_with_prefix(file.smallestkey, subkey_prefix) < 0 &&
           compare_with_prefix(file.largestkey, subkey_prefix) > 0) {
@@ -80,18 +99,21 @@ Status LevelMigrate::PickSSTForLevel(int level) {
     }
   }
 
+  LOG(INFO) << "Found " << pend_sending_sst_subkey.size() << " META SSTs in Level " << level;
   return Status::OK();
 }
-Status LevelMigrate::SendRemoteSST() {
-  auto s = CompactAndMergeMigrate::SendRemoteSST(pend_sending_sst_meta, Engine::kMetadataColumnFamilyName);
-  if (s.IsOK()) {
-    LOG(ERROR) << "Meta SSTs sending error";
-    return s;
+Status LevelMigrate::PickMetaSSTForLevel(int level) {
+  auto meta_level = metacf_level_stats.levels[level];
+
+  for (Slice slot_prefix : slot_prefix_list_) {
+    for (const auto& file : meta_level.files) {
+      // Search through the meta sst list
+      if (compare_with_prefix(file.smallestkey, slot_prefix) < 0 &&
+          compare_with_prefix(file.largestkey, slot_prefix) > 0) {
+        pend_sending_sst_meta.push_back(file.relative_filename);
+      }
+    }
   }
-  s = CompactAndMergeMigrate::SendRemoteSST(pend_sending_sst_subkey, Engine::kSubkeyColumnFamilyName);
-  if (s.IsOK()) {
-    LOG(ERROR) << "Subkey SSTs sending error";
-    return s;
-  }
-  return s;
+  LOG(INFO) << "Found " << pend_sending_sst_meta.size() << " Subkey SSTs in Level " << level;
+  return Status::OK();
 }

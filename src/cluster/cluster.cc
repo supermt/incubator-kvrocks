@@ -861,19 +861,12 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
     }
     case kSeekAndInsertBatched: {
       for (int slot : slots) {
-        //        results.emplace_back(svr_->migration_pool_->enqueue(&Cluster::MigrateSlot, this, slot, dst_node_id));
         s = MigrateSlot(slot, dst_node_id);
         if (!s.IsOK()) {
           return s;
         }
       }
-      //      for (auto &&result : results) {
-      //        Status mg_status = result.get();
-      //        LOG(INFO) << mg_status.GetCode() << mg_status.Msg();
-      //        if (!mg_status.IsOK()) {
-      //          return mg_status;
-      //        }
-      //      }
+
       break;
     }
     case kCompactAndMerge:
@@ -892,10 +885,6 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
   }
 
   LOG(INFO) << "[cluster migration] Finished slot migration cmds sending, start to set nodes";
-
-  s = SetSlots(slots, dst_node_id);
-  if (!s.IsOK()) return s;
-
   // Migration succeed, set slots.
   return Status::OK();
 }

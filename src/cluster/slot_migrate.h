@@ -229,8 +229,8 @@ class CompactAndMergeMigrate : public SlotMigrate {
  private:
   std::vector<std::string> compact_results;
   std::vector<rocksdb::ColumnFamilyDescriptor> cf_desc_;
-  std::vector<std::string> subkey_compact_sst;
-  std::vector<std::string> meta_compact_sst;
+  std::vector<std::string> subkey_compact_sst_;
+  std::vector<std::string> meta_compact_sst_;
   std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
   void CreateCFHandles();
 
@@ -242,8 +242,8 @@ class CompactAndMergeMigrate : public SlotMigrate {
   rocksdb::ColumnFamilyHandle *GetSubkeyCFH();
   Status SendRemoteSST(std::vector<std::string> &file_list, const std::string &column_family);
   rocksdb::DB *compact_ptr;
-  std::vector<rocksdb::Slice> slot_prefix_list_;
-  std::vector<rocksdb::Slice> subkey_prefix_list_;
+  std::vector<std::string> slot_prefix_list_;
+  std::vector<std::string> subkey_prefix_list_;
 };
 
 class LevelMigrate : public CompactAndMergeMigrate {
@@ -254,7 +254,8 @@ class LevelMigrate : public CompactAndMergeMigrate {
 
  protected:
   Status SendSnapshot() override;
-  Status PickSSTForLevel(int level);
+  Status PickMetaSSTForLevel(int level);
+  Status PickSubkeySSTForLevel(int level);
   Status SendRemoteSST();
 
  private:

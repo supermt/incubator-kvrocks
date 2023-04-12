@@ -45,8 +45,8 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   rocksdb::CompactionOptions co;
   co.compression = options.compression;
   co.max_subcompactions = svr_->GetConfig()->max_bg_migration;
-  if (subkey_compact_sst.size() > 0) {
-    auto rocks_s = storage_->GetDB()->CompactFiles(co, GetSubkeyCFH(), subkey_compact_sst, options.num_levels - 1, -1,
+  if (subkey_compact_sst_.size() > 0) {
+    auto rocks_s = storage_->GetDB()->CompactFiles(co, GetSubkeyCFH(), subkey_compact_sst_, options.num_levels - 1, -1,
                                                    &compact_results);
 
     if (!rocks_s.ok()) {
@@ -65,8 +65,8 @@ Status CompactAndMergeMigrate::SendSnapshot() {
     }
   }
 
-  if (meta_compact_sst.size() > 0) {
-    auto rocks_s = storage_->GetDB()->CompactFiles(co, GetMetadataCFH(), meta_compact_sst, options.num_levels - 1, -1,
+  if (meta_compact_sst_.size() > 0) {
+    auto rocks_s = storage_->GetDB()->CompactFiles(co, GetMetadataCFH(), meta_compact_sst_, options.num_levels - 1, -1,
                                                    &compact_results);
     storage_->GetDB()->ContinueBackgroundWork();
     if (!rocks_s.ok()) {
@@ -147,13 +147,17 @@ Status CompactAndMergeMigrate::MigrateStart(Server *svr, const std::string &node
   for (int slot : migrate_slots_) {
     std::string prefix;
     ComposeSlotKeyPrefix(namespace_, slot, &prefix);
-    slot_prefix_list_.emplace_back(prefix);
-    subkey_prefix_list_.emplace_back(ExtractSubkeyPrefix(slot_prefix_list_.back()));
+    slot_prefix_list_.push_back(prefix);
+
+    std::cout << "Slot prefix: " << prefix << " hex:" << Slice(prefix).ToString(true) << std::endl;
+    subkey_prefix_list_.emplace_back(ExtractSubkeyPrefix(Slice(slot_prefix_list_.back())));
+    std::cout << "Slot prefix: " << subkey_prefix_list_.back()
+              << " hex:" << Slice(subkey_prefix_list_.back()).ToString(true) << std::endl;
   }
 
   auto job = std::make_unique<SlotMigrateJob>(migrate_slots_, dst_ip, dst_port, 0, 16, seq_gap);
   LOG(INFO) << "[migrate] Start migrating slots, from slot: " << migrate_slots_.front()
-            << " to slot: " << migrate_slots_.back() << ". Slots are moving to" << dst_ip << ":" << dst_port;
+            << " to slot: " << migrate_slots_.back() << ". Slots are moving to " << dst_ip << ":" << dst_port;
   {
     std::lock_guard<std::mutex> guard(job_mutex_);
     slot_job_ = std::move(job);
@@ -179,10 +183,13 @@ Status CompactAndMergeMigrate::PickSSTs() {
 
   for (const auto &level_stat : metacf_ssts.levels) {
     for (const auto &sst_info : level_stat.files) {
-      for (auto prefix : slot_prefix_list_) {
+      for (Slice prefix : slot_prefix_list_) {
         if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
-            compare_with_prefix(sst_info.largestkey, prefix) > 0)
-          meta_compact_sst.push_back(sst_info.relative_filename);
+            compare_with_prefix(sst_info.largestkey, prefix) > 0) {
+          //          std::cout << Slice(sst_info.smallestkey).ToString(true) << " vs. " << prefix.ToString(true) <<
+          //          std::endl;
+          meta_compact_sst_.push_back(sst_info.relative_filename);
+        }
       }
     }
   }
@@ -191,14 +198,29 @@ Status CompactAndMergeMigrate::PickSSTs() {
   compact_ptr->GetColumnFamilyMetaData(GetSubkeyCFH(), &subkeycf_ssts);
   for (const auto &level_stat : subkeycf_ssts.levels) {
     for (const auto &sst_info : level_stat.files) {
-      if (sst_info.name.find("sst") != sst_info.name.size()) {
-        subkey_compact_sst.push_back(sst_info.relative_filename);
+      for (Slice prefix : subkey_prefix_list_) {
+        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
+            compare_with_prefix(sst_info.largestkey, prefix) > 0)
+          subkey_compact_sst_.push_back(sst_info.relative_filename);
       }
     }
   }
   // Erase redundant SSTs
-  meta_compact_sst = UniqueVector(meta_compact_sst);
-  subkey_compact_sst = UniqueVector(subkey_compact_sst);
+  meta_compact_sst_ = UniqueVector(meta_compact_sst_);
+  subkey_compact_sst_ = UniqueVector(subkey_compact_sst_);
+  std::string file_str;
+  file_str = "meta list: [";
+  for (auto sst : meta_compact_sst_) {
+    file_str = file_str + sst + ',';
+  }
+  file_str.pop_back();
+  file_str += "], subkey list: [";
+  for (auto sst : subkey_compact_sst_) {
+    file_str = file_str + sst + ',';
+  }
+  file_str.pop_back();
+  file_str += "]";
+  LOG(INFO) << "Collected SSTables " << file_str;
 
   return Status::OK();
 }
