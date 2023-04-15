@@ -38,9 +38,9 @@ LevelMigrate::LevelMigrate(Server* svr, int migration_speed, int pipeline_size_l
     : CompactAndMergeMigrate(svr, migration_speed, pipeline_size_limit, seq_gap, batched) {}
 Status LevelMigrate::SendSnapshot() {
   // For each level, pick the SSTs
-  compact_ptr->GetColumnFamilyMetaData(GetMetadataCFH(), &metacf_level_stats);
-  compact_ptr->GetColumnFamilyMetaData(GetSubkeyCFH(), &subkey_stats);
-  LOG(INFO) << "meta level: " << metacf_level_stats.levels.size() << " subkey level: " << subkey_stats.size;
+  svr_->storage_->GetDB()->GetColumnFamilyMetaData(GetMetadataCFH(), &metacf_level_stats);
+  svr_->storage_->GetDB()->GetColumnFamilyMetaData(GetSubkeyCFH(), &subkey_stats);
+  LOG(INFO) << "meta level: " << metacf_level_stats.levels.size() << " subkey level: " << subkey_stats.levels.size();
   for (uint32_t i = 0; i < metacf_level_stats.levels.size(); i++) {
     auto s = PickMetaSSTForLevel(i);
     if (!s.IsOK()) {
@@ -71,16 +71,16 @@ Status LevelMigrate::SendSnapshot() {
 Status LevelMigrate::SendRemoteSST() {
   if (pend_sending_sst_meta.size() > 0) {
     auto s = CompactAndMergeMigrate::SendRemoteSST(pend_sending_sst_meta, Engine::kMetadataColumnFamilyName);
-    if (s.IsOK()) {
-      LOG(ERROR) << "Meta SSTs sending error";
+    if (!s.IsOK()) {
+      LOG(ERROR) << "Meta SSTs sending error, " << s.Msg();
       return s;
     }
   }
 
   if (pend_sending_sst_subkey.size() > 0) {
     auto s = CompactAndMergeMigrate::SendRemoteSST(pend_sending_sst_subkey, Engine::kSubkeyColumnFamilyName);
-    if (s.IsOK()) {
-      LOG(ERROR) << "Subkey SSTs sending error";
+    if (!s.IsOK()) {
+      LOG(ERROR) << "Subkey SSTs sending error, " << s.Msg();
       return s;
     }
   }
@@ -89,20 +89,23 @@ Status LevelMigrate::SendRemoteSST() {
 }
 
 Status LevelMigrate::PickSubkeySSTForLevel(int level) {
+  std::vector<std::string> temp;
   auto subkey_level = subkey_stats.levels[level];
   for (Slice subkey_prefix : subkey_prefix_list_) {
     for (const auto& file : subkey_level.files) {
       if (compare_with_prefix(file.smallestkey, subkey_prefix) < 0 &&
           compare_with_prefix(file.largestkey, subkey_prefix) > 0) {
-        pend_sending_sst_subkey.push_back(file.relative_filename);
+        temp.push_back(file.relative_filename);
       }
     }
   }
 
-  LOG(INFO) << "Found " << pend_sending_sst_subkey.size() << " META SSTs in Level " << level;
+  pend_sending_sst_subkey = UniqueVector(temp);
+  LOG(INFO) << "Found " << pend_sending_sst_subkey.size() << " Subkey SSTs in Level " << level;
   return Status::OK();
 }
 Status LevelMigrate::PickMetaSSTForLevel(int level) {
+  std::vector<std::string> temp;
   auto meta_level = metacf_level_stats.levels[level];
 
   for (Slice slot_prefix : slot_prefix_list_) {
@@ -110,10 +113,12 @@ Status LevelMigrate::PickMetaSSTForLevel(int level) {
       // Search through the meta sst list
       if (compare_with_prefix(file.smallestkey, slot_prefix) < 0 &&
           compare_with_prefix(file.largestkey, slot_prefix) > 0) {
-        pend_sending_sst_meta.push_back(file.relative_filename);
+        temp.push_back(file.relative_filename);
       }
     }
   }
-  LOG(INFO) << "Found " << pend_sending_sst_meta.size() << " Subkey SSTs in Level " << level;
+
+  pend_sending_sst_meta = UniqueVector(temp);
+  LOG(INFO) << "Found " << pend_sending_sst_meta.size() << " META SSTs in Level " << level;
   return Status::OK();
 }

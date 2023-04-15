@@ -102,7 +102,7 @@ class SlotMigrate : public Redis::Database {
   ~SlotMigrate();
   virtual std::string GetName() { return "seek-and-insert"; }
   Status CreateMigrateHandleThread();
-  void Loop();
+  virtual void Loop();
   Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int slot,
                       int speed, int pipeline_size, int seq_gap, bool join = false);
   virtual Status SetMigrationSlots(std::vector<int> &target_slots);
@@ -122,7 +122,6 @@ class SlotMigrate : public Redis::Database {
   bool IsMigrationInProgress() const { return migrate_state_ == kMigrateStarted; }
   int16_t GetMigrateStateMachine() const { return state_machine_; }
   int16_t GetForbiddenSlot() const { return forbidden_slot_; }
-  int16_t GetMigratingSlot() const { return migrate_slot_; }
   void GetMigrateInfo(std::string *info) const;
   bool IsTerminated() { return thread_state_ == ThreadState::Terminated; }
   bool IsBatched() { return batched_; }
@@ -136,7 +135,7 @@ class SlotMigrate : public Redis::Database {
   Status SyncWal();
   Status Success();
   Status Fail();
-  void Clean();
+  virtual void Clean();
 
   Status AuthDstServer(int sock_fd, const std::string &password);
   Status SetDstImportStatus(int sock_fd, int status);
@@ -186,7 +185,6 @@ class SlotMigrate : public Redis::Database {
   std::mutex job_mutex_;
   std::condition_variable job_cv_;
 
- private:
   MigrateStateMachine state_machine_ = kSlotMigrateNone;
   ParserState parser_state_ = ParserState::ArrayLen;
   std::atomic<ThreadState> thread_state_ = ThreadState::Uninitialized;
@@ -200,7 +198,7 @@ class SlotMigrate : public Redis::Database {
   std::thread t_;
   int dst_port_ = -1;
   std::atomic<int16_t> forbidden_slot_ = -1;
-  std::atomic<int16_t> migrate_slot_ = -1;
+  //  std::atomic<int16_t> migrate_slot_ = -1;
   int16_t migrate_failed_slot_ = -1;
   std::atomic<bool> stop_migrate_ = false;  // if is true migration will be stopped but the thread won't be destroyed
   std::string current_migrate_key_;
@@ -208,6 +206,22 @@ class SlotMigrate : public Redis::Database {
   uint64_t wal_begin_seq_ = 0;
   uint64_t wal_increment_seq_ = 0;
   bool batched_;
+};
+
+class ParallelSlotMigrate : public SlotMigrate {
+ public:
+  explicit ParallelSlotMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
+                               int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit,
+                               bool batched = true);
+  void Loop() override;
+  void Clean() override;
+  virtual std::string GetName() { return "parallel seek-and-insert"; }
+  Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int seq_gap,
+                      bool join) override;
+  Status SetMigrationSlots(std::vector<int> &target_slots) override;
+
+ private:
+  std::map<int, std::vector<int>> slots_for_thread_;
 };
 
 class CompactAndMergeMigrate : public SlotMigrate {
@@ -221,6 +235,12 @@ class CompactAndMergeMigrate : public SlotMigrate {
   Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int seq_gap,
                       bool join) override;
 
+  inline std::vector<std::string> UniqueVector(std::vector<std::string> &input) {
+    std::sort(input.begin(), input.end());
+    auto pos = std::unique(input.begin(), input.end());
+    input.erase(pos, input.end());
+    return input;
+  }
   inline int compare_with_prefix(const std::string &x, rocksdb::Slice &prefix) {
     rocksdb::Slice x_slice(x);
     return memcmp(x_slice.data_, prefix.data_, prefix.size_);
@@ -241,7 +261,7 @@ class CompactAndMergeMigrate : public SlotMigrate {
   rocksdb::ColumnFamilyHandle *GetMetadataCFH();
   rocksdb::ColumnFamilyHandle *GetSubkeyCFH();
   Status SendRemoteSST(std::vector<std::string> &file_list, const std::string &column_family);
-  rocksdb::DB *compact_ptr;
+  //  rocksdb::DB *compact_ptr;
   std::vector<std::string> slot_prefix_list_;
   std::vector<std::string> subkey_prefix_list_;
 };
@@ -257,6 +277,8 @@ class LevelMigrate : public CompactAndMergeMigrate {
   Status PickMetaSSTForLevel(int level);
   Status PickSubkeySSTForLevel(int level);
   Status SendRemoteSST();
+
+  virtual std::string GetName() { return "Level-based"; }
 
  private:
   rocksdb::ColumnFamilyMetaData metacf_level_stats;

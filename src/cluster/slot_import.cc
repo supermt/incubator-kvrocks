@@ -67,7 +67,7 @@ bool SlotImport::Success(int slot) {
     LOG(ERROR) << "[import] Failed to set slot, Err: " << s.Msg();
     return false;
   }
-
+  LOG(INFO) << "[slot import] slot imported " << import_slot_;
   import_status_ = kImportSuccess;
   import_fd_ = -1;
   return true;

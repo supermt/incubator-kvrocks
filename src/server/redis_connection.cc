@@ -107,7 +107,7 @@ void Connection::OnEvent(bufferevent *bev, int16_t events, void *ctx) {
 #ifdef ENABLE_OPENSSL
                << ", SSL Error: " << SSLError(bufferevent_get_openssl_error(bev))  // NOLINT
 #endif
-        ;  // NOLINT
+        ;                                                                          // NOLINT
     conn->Close();
     return;
   }
@@ -387,8 +387,8 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
         Reply(Redis::Error(s.Msg()));
         continue;
       }
+//      LOG(INFO) << "Sver need to redirect " << cmd_tokens.front();
     }
-
     // We don't execute commands, but queue them, ant then execute in EXEC command
     if (IsFlagEnabled(Connection::kMultiExec) && !in_exec_ && !attributes->is_multi()) {
       multi_cmds_.emplace_back(cmd_tokens);

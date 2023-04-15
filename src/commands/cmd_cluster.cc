@@ -342,10 +342,6 @@ class CommandClusterX : public Commander {
         *output = Redis::Error(s.Msg());
       }
     } else if (subcommand_ == "setslot") {
-      if (slot_ == -1 && slots_.size() > 0) {
-        Status s = svr->cluster_->SetSlots(slots_, args_[4]);
-      }
-
       Status s = svr->cluster_->SetSlot(slot_id_, args_[4], set_version_);
       if (s.IsOK()) {
         need_persist_nodes_info = true;

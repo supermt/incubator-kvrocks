@@ -39,7 +39,9 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   Status s;
   storage_->GetDB()->PauseBackgroundWork();
   s = PickSSTs();
-
+  if (!s.IsOK()) {
+    return s;
+  }
   // Ask the writable DB instance to do the compaction
   auto options = storage_->GetDB()->GetOptions();
   rocksdb::CompactionOptions co;
@@ -123,14 +125,19 @@ void CompactAndMergeMigrate::CreateCFHandles() {
 CompactAndMergeMigrate::CompactAndMergeMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap,
                                                bool batched)
     : SlotMigrate(svr, migration_speed, pipeline_size_limit, seq_gap, batched) {
-  this->CreateCFHandles();
+  //  this->CreateCFHandles();
   auto options = svr->storage_->GetDB()->GetOptions();
-  rocksdb::Status s =
-      rocksdb::DB::OpenForReadOnly(options, svr_->GetConfig()->db_dir, cf_desc_, &cf_handles_, &compact_ptr);
-  assert(s.ok());
+
+  //  rocksdb::Status s =
+  //      rocksdb::DB::OpenForReadOnly(options, svr_->GetConfig()->db_dir, cf_desc_, &cf_handles_, &compact_ptr);
+  //  assert(s.ok());
 }
-rocksdb::ColumnFamilyHandle *CompactAndMergeMigrate::GetMetadataCFH() { return cf_handles_[1]; }
-rocksdb::ColumnFamilyHandle *CompactAndMergeMigrate::GetSubkeyCFH() { return cf_handles_[0]; }
+rocksdb::ColumnFamilyHandle *CompactAndMergeMigrate::GetMetadataCFH() {
+  return svr_->storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
+}
+rocksdb::ColumnFamilyHandle *CompactAndMergeMigrate::GetSubkeyCFH() {
+  return svr_->storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
+}
 Status CompactAndMergeMigrate::SetMigrationSlots(std::vector<int> &target_slots) {
   if (!migrate_slots_.empty() || this->IsMigrationInProgress()) {
     return {Status::NotOK, "Last Migrate Batch is not finished"};
@@ -149,10 +156,10 @@ Status CompactAndMergeMigrate::MigrateStart(Server *svr, const std::string &node
     ComposeSlotKeyPrefix(namespace_, slot, &prefix);
     slot_prefix_list_.push_back(prefix);
 
-    std::cout << "Slot prefix: " << prefix << " hex:" << Slice(prefix).ToString(true) << std::endl;
+    //    std::cout << "Slot prefix: " << prefix << " hex:" << Slice(prefix).ToString(true) << std::endl;
     subkey_prefix_list_.emplace_back(ExtractSubkeyPrefix(Slice(slot_prefix_list_.back())));
-    std::cout << "Slot prefix: " << subkey_prefix_list_.back()
-              << " hex:" << Slice(subkey_prefix_list_.back()).ToString(true) << std::endl;
+    //    std::cout << "Slot prefix: " << subkey_prefix_list_.back()
+    //              << " hex:" << Slice(subkey_prefix_list_.back()).ToString(true) << std::endl;
   }
 
   auto job = std::make_unique<SlotMigrateJob>(migrate_slots_, dst_ip, dst_port, 0, 16, seq_gap);
@@ -166,12 +173,6 @@ Status CompactAndMergeMigrate::MigrateStart(Server *svr, const std::string &node
   return Status::OK();
 }
 
-inline std::vector<std::string> UniqueVector(std::vector<std::string> &input) {
-  std::sort(input.begin(), input.end());
-  auto pos = std::unique(input.begin(), input.end());
-  input.erase(pos, input.end());
-  return input;
-}
 Status CompactAndMergeMigrate::PickSSTs() {
   rocksdb::ReadOptions read_options;
   read_options.snapshot = slot_snapshot_;
@@ -179,26 +180,29 @@ Status CompactAndMergeMigrate::PickSSTs() {
   rocksdb::ColumnFamilyHandle *meta_cf_handle = GetMetadataCFH();
   //  auto iter = DBUtil::UniqueIterator(storage_->GetDB()->NewIterator(read_options, meta_cf_handle));
   rocksdb::ColumnFamilyMetaData metacf_ssts;
-  compact_ptr->GetColumnFamilyMetaData(meta_cf_handle, &metacf_ssts);
+  svr_->storage_->GetDB()->GetColumnFamilyMetaData(meta_cf_handle, &metacf_ssts);
+  std::cout << "Picking SSTs" << std::endl;
 
-  for (const auto &level_stat : metacf_ssts.levels) {
-    for (const auto &sst_info : level_stat.files) {
+  for (const auto &meta_level_stat : metacf_ssts.levels) {
+    for (const auto &meta_sst : meta_level_stat.files) {
       for (Slice prefix : slot_prefix_list_) {
-        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
-            compare_with_prefix(sst_info.largestkey, prefix) > 0) {
-          //          std::cout << Slice(sst_info.smallestkey).ToString(true) << " vs. " << prefix.ToString(true) <<
-          //          std::endl;
-          meta_compact_sst_.push_back(sst_info.relative_filename);
+        if (compare_with_prefix(meta_sst.smallestkey, prefix) < 0 &&
+            compare_with_prefix(meta_sst.largestkey, prefix) > 0) {
+          std::cout << Slice(meta_sst.smallestkey).ToString(true) << " vs. " << prefix.ToString(true) << std::endl;
+          meta_compact_sst_.push_back(meta_sst.relative_filename);
         }
       }
     }
   }
 
   rocksdb::ColumnFamilyMetaData subkeycf_ssts;
-  compact_ptr->GetColumnFamilyMetaData(GetSubkeyCFH(), &subkeycf_ssts);
+  svr_->storage_->GetDB()->GetColumnFamilyMetaData(GetSubkeyCFH(), &subkeycf_ssts);
   for (const auto &level_stat : subkeycf_ssts.levels) {
     for (const auto &sst_info : level_stat.files) {
       for (Slice prefix : subkey_prefix_list_) {
+        std::cout << Slice(sst_info.smallestkey).ToString(true) << " vs. " << prefix.ToString(true)
+                  << " result: " << compare_with_prefix(sst_info.smallestkey, prefix) << std::endl;
+
         if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
             compare_with_prefix(sst_info.largestkey, prefix) > 0)
           subkey_compact_sst_.push_back(sst_info.relative_filename);
@@ -209,12 +213,12 @@ Status CompactAndMergeMigrate::PickSSTs() {
   meta_compact_sst_ = UniqueVector(meta_compact_sst_);
   subkey_compact_sst_ = UniqueVector(subkey_compact_sst_);
   std::string file_str;
-  file_str = "meta list: [";
+  file_str = "meta list: [ ";
   for (auto sst : meta_compact_sst_) {
     file_str = file_str + sst + ',';
   }
   file_str.pop_back();
-  file_str += "], subkey list: [";
+  file_str += "], subkey list: [ ";
   for (auto sst : subkey_compact_sst_) {
     file_str = file_str + sst + ',';
   }
@@ -228,7 +232,7 @@ std::string CompactAndMergeMigrate::ExtractSubkeyPrefix(const Slice &slot_prefix
   rocksdb::ReadOptions read_options;
   read_options.snapshot = slot_snapshot_;
   storage_->SetReadOptions(read_options);
-  auto iter = DBUtil::UniqueIterator(compact_ptr->NewIterator(read_options, GetMetadataCFH()));
+  auto iter = DBUtil::UniqueIterator(svr_->storage_->GetDB()->NewIterator(read_options, GetMetadataCFH()));
 
   iter->Seek(slot_prefix);
   Slice first_slot_key = iter->key();
@@ -257,6 +261,7 @@ Status CompactAndMergeMigrate::SendRemoteSST(std::vector<std::string> &file_list
   cmds = Redis::MultiBulkString({"fetch_remote_sst", "remote", column_family_name, file_str}, false);
   s = SendCmdsPipelineIfNeed(&cmds, true);
 
-  LOG(INFO) << "[" << this->GetName() << "] Send File Success, total # of files: " << file_list.size();
+  LOG(INFO) << "[" << this->GetName() << "] Send File Success, total # of files: " << file_list.size()
+            << ", file_list: " << file_str;
   return s;
 }

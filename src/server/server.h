@@ -223,10 +223,12 @@ class Server {
   Engine::Storage *storage_;
   std::unique_ptr<Cluster> cluster_;
   static std::atomic<int> unix_time_;
+  std::atomic<int16_t> working_slot_migrating = 0;
   std::unique_ptr<SlotMigrate> slot_migrate_;
-  std::unique_ptr<SlotImport> slot_import_;
-  std::unique_ptr<ThreadPool> migration_pool_;
+  //  std::unique_ptr<SlotImport> slot_import_;
+  //  std::unique_ptr<ThreadPool> migration_pool_;
   std::map<int, std::unique_ptr<SlotImport>> slot_import_map;
+  std::map<int, std::unique_ptr<SlotMigrate>> migration_pool_;
 
   void UpdateWatchedKeysFromArgs(const std::vector<std::string> &args, const Redis::CommandAttributes &attr);
   void UpdateWatchedKeysManually(const std::vector<std::string> &keys);
