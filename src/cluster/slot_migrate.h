@@ -198,7 +198,7 @@ class SlotMigrate : public Redis::Database {
   std::thread t_;
   int dst_port_ = -1;
   std::atomic<int16_t> forbidden_slot_ = -1;
-  //  std::atomic<int16_t> migrate_slot_ = -1;
+  std::atomic<int16_t> migrating_slot_ = -1;
   int16_t migrate_failed_slot_ = -1;
   std::atomic<bool> stop_migrate_ = false;  // if is true migration will be stopped but the thread won't be destroyed
   std::string current_migrate_key_;

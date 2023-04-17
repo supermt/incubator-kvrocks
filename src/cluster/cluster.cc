@@ -303,25 +303,9 @@ Status Cluster::MigrateSlot(int slot, const std::string &dst_node_id) {
   Status s = ValidateMigrateSlot(slot, dst_node_id);
   if (!s.IsOK()) return s;
   const auto dst = nodes_[dst_node_id];
-  if (svr_->GetConfig()->migrate_method == kSeekAndInsertBatched) {
-    //    std::unique_ptr<SlotMigrate> migrate = std::make_unique<SlotMigrate>(svr_);
-    //    s = migrate->CreateMigrateHandleThread();
-    //    if (!s.IsOK()) return s;
-    //    s = migrate->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot, svr_->GetConfig()->migrate_speed,
-    //                              svr_->GetConfig()->pipeline_size, svr_->GetConfig()->sequence_gap, true);
-    //    migrate.release();
-    int i = slot % svr_->GetConfig()->max_bg_migration;
-    s = svr_->migration_pool_[i]->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot,
-                                               svr_->GetConfig()->migrate_speed, svr_->GetConfig()->pipeline_size,
-                                               svr_->GetConfig()->sequence_gap, true);
-    if (!s.IsOK()) {
-      return s;
-    }
-  } else {
-    s = svr_->slot_migrate_->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot,
-                                          svr_->GetConfig()->migrate_speed, svr_->GetConfig()->pipeline_size,
-                                          svr_->GetConfig()->sequence_gap, true);
-  }
+  s = svr_->slot_migrate_->MigrateStart(svr_, dst_node_id, dst->host_, dst->port_, slot,
+                                        svr_->GetConfig()->migrate_speed, svr_->GetConfig()->pipeline_size,
+                                        svr_->GetConfig()->sequence_gap, true);
 
   return s;
 }

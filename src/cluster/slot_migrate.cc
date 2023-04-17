@@ -81,18 +81,16 @@ SlotMigrate::SlotMigrate(Server *svr, int migration_speed, int pipeline_size_lim
 }
 
 Status SlotMigrate::MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port,
-                                 int slot, int speed, int pipeline_size, int seq_gap, bool join) {
-  // Only one slot migration job at the same time
-  //  int16_t no_slot = -1;
-  if (std::find(migrate_slots_.begin(), migrate_slots_.end(), slot) != migrate_slots_.end()) {
-    return {Status::NotOK, "Target is already in progress"};
+                                 int slot_id, int speed, int pipeline_size, int seq_gap, bool join) {
+  int16_t no_slot = -1;
+  if (!migrating_slot_.compare_exchange_strong(no_slot, static_cast<int16_t>(slot_id))) {
+    return {Status::NotOK, "There is already a migrating slot"};
   }
 
-  if (forbidden_slot_ == slot) {
+  if (forbidden_slot_ == slot_id) {
     // Have to release migrate slot set above
     return {Status::NotOK, "Target slot in forbidden state"};
   }
-  migrate_slots_.emplace_back(slot);
 
   migrate_state_ = kMigrateStarted;
   if (speed <= 0) {
@@ -105,21 +103,8 @@ Status SlotMigrate::MigrateStart(Server *svr, const std::string &node_id, const 
     seq_gap = kDefaultSeqGapLimit;
   }
   dst_node_ = node_id;
-  //  if (join) {
-  //    for (auto &job_slot : migrate_slots_) {
-  //      auto job = std::make_unique<SlotMigrateJob>(job_slot, dst_ip, dst_port, speed, pipeline_size, seq_gap);
-  //      LOG(INFO) << "[migrate] Start migrating slot " << job_slot << " to " << dst_ip << ":" << dst_port;
-  //      {
-  //        std::lock_guard<std::mutex> guard(job_mutex_);
-  //        slot_job_ = std::move(job);
-  //        job_cv_.notify_one();
-  //        //    job_cv_.notify_one();
-  //      }
-  //    }
-  //  }
-  // Create migration job
-  auto job = std::make_unique<SlotMigrateJob>(slot, dst_ip, dst_port, speed, pipeline_size, seq_gap);
-  LOG(INFO) << "[migrate] Start migrating slot " << slot << " to " << dst_ip << ":" << dst_port;
+  auto job = std::make_unique<SlotMigrateJob>(slot_id, dst_ip, dst_port, speed, pipeline_size, seq_gap);
+  LOG(INFO) << "[migrate] Start migrating slot " << slot_id << " to " << dst_ip << ":" << dst_port;
   {
     std::lock_guard<std::mutex> guard(job_mutex_);
     slot_job_ = std::move(job);

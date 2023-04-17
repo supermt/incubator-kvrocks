@@ -1730,13 +1730,13 @@ Status Server::ChooseMigrationMethod() {
 
     switch (config_->migrate_method) {
       case kSeekAndInsert: {
-        slot_migrate_ =
-            std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
+        slot_migrate_ = std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size,
+                                                      config_->sequence_gap, false);
         break;
       }
       case kSeekAndInsertBatched: {
         slot_migrate_ = std::make_unique<ParallelSlotMigrate>(this, config_->migrate_speed, config_->pipeline_size,
-                                                              config_->sequence_gap, false);
+                                                              config_->sequence_gap, true);
         break;
       }
       case kCompactAndMerge: {
