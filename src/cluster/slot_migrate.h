@@ -95,8 +95,7 @@ struct SlotMigrateJob {
 class SlotMigrate : public Redis::Database {
  public:
   explicit SlotMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
-                       int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit,
-                       bool batched = false);
+                       int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
   SlotMigrate(const SlotMigrate &other) = delete;
   SlotMigrate &operator=(const SlotMigrate &other) = delete;
   ~SlotMigrate();
@@ -198,7 +197,7 @@ class SlotMigrate : public Redis::Database {
   std::thread t_;
   int dst_port_ = -1;
   std::atomic<int16_t> forbidden_slot_ = -1;
-  std::atomic<int16_t> migrating_slot_ = -1;
+  std::atomic<int16_t> migrate_slot_ = -1;
   int16_t migrate_failed_slot_ = -1;
   std::atomic<bool> stop_migrate_ = false;  // if is true migration will be stopped but the thread won't be destroyed
   std::string current_migrate_key_;
@@ -211,8 +210,7 @@ class SlotMigrate : public Redis::Database {
 class ParallelSlotMigrate : public SlotMigrate {
  public:
   explicit ParallelSlotMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
-                               int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit,
-                               bool batched = true);
+                               int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
   void Loop() override;
   void Clean() override;
   virtual std::string GetName() { return "parallel seek-and-insert"; }
@@ -228,7 +226,7 @@ class CompactAndMergeMigrate : public SlotMigrate {
  public:
   explicit CompactAndMergeMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
                                   int pipeline_size_limit = kDefaultPipelineSizeLimit,
-                                  int seq_gap = kDefaultSeqGapLimit, bool batched = true);
+                                  int seq_gap = kDefaultSeqGapLimit);
   Status SetMigrationSlots(std::vector<int> &target_slots) override;
 
   std::string GetName() override { return "compact-and-merge"; }
@@ -269,8 +267,7 @@ class CompactAndMergeMigrate : public SlotMigrate {
 class LevelMigrate : public CompactAndMergeMigrate {
  public:
   explicit LevelMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
-                        int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit,
-                        bool batched = false);
+                        int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
 
  protected:
   Status SendSnapshot() override;

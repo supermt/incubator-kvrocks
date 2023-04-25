@@ -122,15 +122,9 @@ void CompactAndMergeMigrate::CreateCFHandles() {
   cf_desc_.emplace_back(rocksdb::kDefaultColumnFamilyName, subkey_opts);
   cf_desc_.emplace_back(Engine::kMetadataColumnFamilyName, metadata_opts);
 }
-CompactAndMergeMigrate::CompactAndMergeMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap,
-                                               bool batched)
-    : SlotMigrate(svr, migration_speed, pipeline_size_limit, seq_gap, batched) {
-  //  this->CreateCFHandles();
-  auto options = svr->storage_->GetDB()->GetOptions();
-
-  //  rocksdb::Status s =
-  //      rocksdb::DB::OpenForReadOnly(options, svr_->GetConfig()->db_dir, cf_desc_, &cf_handles_, &compact_ptr);
-  //  assert(s.ok());
+CompactAndMergeMigrate::CompactAndMergeMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap)
+    : SlotMigrate(svr, migration_speed, pipeline_size_limit, seq_gap) {
+  this->batched_ = true;
 }
 rocksdb::ColumnFamilyHandle *CompactAndMergeMigrate::GetMetadataCFH() {
   return svr_->storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
@@ -258,8 +252,14 @@ Status CompactAndMergeMigrate::SendRemoteSST(std::vector<std::string> &file_list
   }
   file_str.pop_back();
   std::string cmds;
-  cmds = Redis::MultiBulkString({"fetch_remote_sst", "remote", column_family_name, file_str}, false);
+  cmds =
+      Redis::MultiBulkString({"sst_ingest", "remote", column_family_name, file_str, svr_->cluster_->GetMyId()}, false);
+  current_pipeline_size_++;
   s = SendCmdsPipelineIfNeed(&cmds, true);
+  if (!s.IsOK()) {
+    LOG(ERROR) << "[" << this->GetName() << "] Send File Error, why: " << s.Msg();
+    return s;
+  }
 
   LOG(INFO) << "[" << this->GetName() << "] Send File Success, total # of files: " << file_list.size()
             << ", file_list: " << file_str;

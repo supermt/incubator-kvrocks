@@ -34,8 +34,10 @@
 #include "types/redis_stream_base.h"
 #include "types/redis_string.h"
 
-LevelMigrate::LevelMigrate(Server* svr, int migration_speed, int pipeline_size_limit, int seq_gap, bool batched)
-    : CompactAndMergeMigrate(svr, migration_speed, pipeline_size_limit, seq_gap, batched) {}
+LevelMigrate::LevelMigrate(Server* svr, int migration_speed, int pipeline_size_limit, int seq_gap)
+    : CompactAndMergeMigrate(svr, migration_speed, pipeline_size_limit, seq_gap) {
+  this->batched_ = true;
+}
 Status LevelMigrate::SendSnapshot() {
   // For each level, pick the SSTs
   svr_->storage_->GetDB()->GetColumnFamilyMetaData(GetMetadataCFH(), &metacf_level_stats);

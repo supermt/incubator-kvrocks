@@ -36,9 +36,10 @@
 #include "types/redis_stream_base.h"
 #include "types/redis_string.h"
 
-ParallelSlotMigrate::ParallelSlotMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap,
-                                         bool batched)
-    : SlotMigrate(svr, migration_speed, pipeline_size_limit, seq_gap, batched) {}
+ParallelSlotMigrate::ParallelSlotMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap)
+    : SlotMigrate(svr, migration_speed, pipeline_size_limit, seq_gap) {
+  this->batched_ = false;
+}
 void ParallelSlotMigrate::Loop() {
   while (true) {
     std::unique_lock<std::mutex> ul(job_mutex_);
@@ -64,6 +65,7 @@ void ParallelSlotMigrate::Loop() {
 
     for (int slot : slot_job_->slots_) {
       slot_job_->migrate_slot_ = slot;
+      migrate_slot_ = (int16_t)slot;
       RunStateMachine();
     }
 

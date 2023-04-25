@@ -850,13 +850,29 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
   // Migration succeed, set slots.
   return Status::OK();
 }
-Status Cluster::FetchFileFromRemote(const std::string &ip, const int port, std::vector<std::string> &file_list,
+Status Cluster::FetchFileFromRemote(const std::string &server_id, std::vector<std::string> &file_list,
                                     const std::string &temp_dir) {
+  if (nodes_.find(server_id) == nodes_.end()) {
+    return {Status::NotOK, "Can't find the destination node id"};
+  }
+  auto target_server = nodes_[server_id];
+  auto port = target_server->port_;
+  auto ip = target_server->host_;
+
   size_t concurrency = 1;
   if (file_list.size() > 20) {
     // Use 4 threads to download files in parallel
     concurrency = 4;
   }
+  std::string file_str = "[ ";
+  for (auto &file : file_list) {
+    file_str += file + ",";
+  }
+  file_str.pop_back();
+  file_str += "]";
+
+  LOG(INFO) << "Start Fetching Files, # of SSTs:" << file_list.size();
+
   std::atomic<uint32_t> fetch_cnt = {0};
   std::atomic<uint32_t> skip_cnt = {0};
   std::vector<std::future<Status>> results;
@@ -864,6 +880,7 @@ Status Cluster::FetchFileFromRemote(const std::string &ip, const int port, std::
     results.push_back(
         std::async(std::launch::async,
                    [this, temp_dir, &file_list, tid, concurrency, &fetch_cnt, &skip_cnt, ip, port]() -> Status {
+                     LOG(INFO) << "Fetching file from remote, address: " << ip << ":" << port;
                      int sock_fd = GET_OR_RET(Util::SockConnect(ip, port).Prefixed("connect the server err"));
                      UniqueFD unique_fd{sock_fd};
                      auto s = this->svr_->slot_migrate_->SendAuth(sock_fd);
@@ -895,10 +912,13 @@ Status Cluster::FetchFileFromRemote(const std::string &ip, const int port, std::
                    }));
   }
 
-  // Wait til finish
+  // Wait till finish
   for (auto &f : results) {
     Status s = f.get();
-    if (!s.IsOK()) return s;
+    if (!s.IsOK()) {
+      LOG(ERROR) << "Receive file error: " << s.Msg();
+      return s;
+    }
   }
   return Status::OK();
 }
@@ -960,15 +980,14 @@ Status Cluster::fetchFiles(int sock_fd, const std::string &dir, const std::vecto
 
   UniqueEvbuf evbuf;
   for (const auto &file : files) {
-    DLOG(INFO) << "[fetch] Start to fetch file " << file;
+    LOG(INFO) << "[fetch] Start to fetch file " << file;
     s = fetchFile(sock_fd, evbuf.get(), dir, file, 0, fn);
     if (!s.IsOK()) {
       s = Status(Status::NotOK, "fetch file err: " + s.Msg());
       LOG(WARNING) << "[fetch] Fail to fetch file " << file << ", err: " << s.Msg();
       break;
     }
-    DLOG(INFO) << "[fetch] Succeed fetching file " << file;
-
+    LOG(INFO) << "[fetch] Succeed fetching file " << file;
     // Just for tests
     if (svr_->GetConfig()->fullsync_recv_file_delay) {
       sleep(svr_->GetConfig()->fullsync_recv_file_delay);

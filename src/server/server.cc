@@ -1730,23 +1730,23 @@ Status Server::ChooseMigrationMethod() {
 
     switch (config_->migrate_method) {
       case kSeekAndInsert: {
-        slot_migrate_ = std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size,
-                                                      config_->sequence_gap, false);
+        slot_migrate_ =
+            std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
         break;
       }
       case kSeekAndInsertBatched: {
         slot_migrate_ = std::make_unique<ParallelSlotMigrate>(this, config_->migrate_speed, config_->pipeline_size,
-                                                              config_->sequence_gap, true);
+                                                              config_->sequence_gap);
         break;
       }
       case kCompactAndMerge: {
-        this->slot_migrate_ = std::make_unique<CompactAndMergeMigrate>(
-            this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap, true);
+        this->slot_migrate_ = std::make_unique<CompactAndMergeMigrate>(this, config_->migrate_speed,
+                                                                       config_->pipeline_size, config_->sequence_gap);
         break;
       }
       case kLevelMigration: {
-        this->slot_migrate_ = std::make_unique<LevelMigrate>(this, config_->migrate_speed, config_->pipeline_size,
-                                                             config_->sequence_gap, true);
+        this->slot_migrate_ =
+            std::make_unique<LevelMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
         break;
       }
       default:
@@ -1756,6 +1756,8 @@ Status Server::ChooseMigrationMethod() {
     //    slot_import_ = std::make_unique<SlotImport>(this);
     // Create migrating thread
     s = slot_migrate_->CreateMigrateHandleThread();
+    rocksdb::Env::Default()->CreateDirIfMissing(config_->migration_sync_dir);
+
     if (!s.IsOK()) {
       return s.Prefixed("failed to create migration thread");
     }
