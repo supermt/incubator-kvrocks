@@ -132,7 +132,9 @@ class CommandIngest : public Commander {
     column_family_name_ = args[2];
     files_str_ = args[3];
     server_id_ = args[4];
-
+    if (remote_or_local_ != "local" && remote_or_local_ != "remote") {
+      return {Status::NotOK, "Failed cmd format, it should be like: ingest remote|local file1,file2,file3"};
+    }
     return Status::OK();
   }
   Status Execute(Server *svr, Connection *conn, std::string *output) override {
@@ -144,20 +146,32 @@ class CommandIngest : public Commander {
       return svr->cluster_->IngestFiles(column_family_name_, files);
     } else if (remote_or_local_ == "remote") {
       LOG(INFO) << "Fetching data from remote server: " << server_id_;
+      auto start = Util::GetTimeStampMS();
       auto s = svr->cluster_->FetchFileFromRemote(server_id_, files, svr->GetConfig()->migration_sync_dir);
-
+      auto end = Util::GetTimeStampMS();
       if (!s.IsOK()) {
         LOG(ERROR) << "Fetching data error " << s.Msg();
+        *output = Redis::SimpleString("Fetch error");
         return s;
       }
-      s = svr->cluster_->IngestFiles(column_family_name_, files);
+      LOG(INFO) << "Fetched all SST, time taken(ms): " << end - start;
+      std::vector<std::string> ingestion_candidates;
+      for (auto file : files) {
+        ingestion_candidates.push_back(svr->GetConfig()->migration_sync_dir + "/" + file);
+      }
+
+      LOG(INFO) << "Start Ingestion";
+      s = svr->cluster_->IngestFiles(column_family_name_, ingestion_candidates);
+
       if (!s.IsOK()) {
+        *output = Redis::SimpleString("Ingestion error");
         LOG(ERROR) << "Ingesting data error " << s.Msg();
         return s;
       }
-      return s;
+      *output = Redis::SimpleString("OK");
+      return Status::OK();
     }
-    return {Status::NotOK, "Failed cmd format, it should be like: ingest remote|local file1,file2,file3"};
+    return {Status::NotOK, "Execution failed"};
   }
 
  private:

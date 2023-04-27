@@ -419,7 +419,15 @@ Status SlotMigrate::Fail() {
 }
 
 void SlotMigrate::Clean() {
-  LOG(INFO) << "[migrate] Clean resources of migrating slot " << migrate_slot_;
+  std::string slot_id_info;
+  if (!this->IsBatched()) {
+    slot_id_info = std::to_string(migrate_slot_);
+  } else {
+    slot_id_info =
+        "range:[ " + std::to_string(slot_job_->slots_.front()) + std::to_string(slot_job_->slots_.back()) + "]";
+  }
+
+  LOG(INFO) << "[" << GetName() << "] Clean resources of migrating slot " << slot_id_info;
   if (slot_snapshot_) {
     storage_->GetDB()->ReleaseSnapshot(slot_snapshot_);
     slot_snapshot_ = nullptr;
@@ -1159,3 +1167,5 @@ Status SlotMigrate::SendAuth(int target_fd) {
     return s;
   };
 }
+
+Ingestion::Ingestion(Server *svr, std::vector<std::string> &candidates) {}

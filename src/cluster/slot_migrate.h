@@ -92,6 +92,17 @@ struct SlotMigrateJob {
   int seq_gap_;
 };
 
+class Ingestion {
+ public:
+  explicit Ingestion(Server *svr, std::vector<std::string> &candidates);
+
+ private:
+  std::mutex job_mutex_;
+  std::condition_variable job_cv_;
+  Server *svr_;
+  std::vector<std::string> candidates;
+};
+
 class SlotMigrate : public Redis::Database {
  public:
   explicit SlotMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,

@@ -97,7 +97,7 @@ Status LevelMigrate::PickSubkeySSTForLevel(int level) {
     for (const auto& file : subkey_level.files) {
       if (compare_with_prefix(file.smallestkey, subkey_prefix) < 0 &&
           compare_with_prefix(file.largestkey, subkey_prefix) > 0) {
-        temp.push_back(file.relative_filename);
+        temp.push_back(file.name);
       }
     }
   }
@@ -115,7 +115,7 @@ Status LevelMigrate::PickMetaSSTForLevel(int level) {
       // Search through the meta sst list
       if (compare_with_prefix(file.smallestkey, slot_prefix) < 0 &&
           compare_with_prefix(file.largestkey, slot_prefix) > 0) {
-        temp.push_back(file.relative_filename);
+        temp.push_back(file.name);
       }
     }
   }

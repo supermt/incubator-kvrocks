@@ -20,14 +20,15 @@ include_guard()
 set(COMPILE_WITH_JEMALLOC ON)
 
 if (DISABLE_JEMALLOC)
-  set(COMPILE_WITH_JEMALLOC OFF)
-endif()
+    set(COMPILE_WITH_JEMALLOC OFF)
+endif ()
 
 include(cmake/utils.cmake)
 
 FetchContent_Declare(rocksdb
         GIT_REPOSITORY https://github.com/supermt/rocksdb-for-kvrocks.git)
-
+#FetchContent_Declare(rocksdb
+#        GIT_REPOSITORY https://github.com/facebook/rocksdb.git)
 #FetchContent_DeclareGitHubWithMirror(rocksdb
 #  facebook/rocksdb v8.0.0
 #  MD5=090fcfbc734001bd97e602f0e0777ad3
@@ -38,25 +39,25 @@ FetchContent_GetProperties(snappy)
 FetchContent_GetProperties(tbb)
 
 FetchContent_MakeAvailableWithArgs(rocksdb
-  CMAKE_MODULE_PATH=${PROJECT_SOURCE_DIR}/cmake/modules # to locate FindJeMalloc.cmake
-  Snappy_DIR=${PROJECT_SOURCE_DIR}/cmake/modules # to locate SnappyConfig.cmake
-  FAIL_ON_WARNINGS=OFF
-  WITH_TESTS=OFF
-  WITH_BENCHMARK_TOOLS=OFF
-  WITH_CORE_TOOLS=OFF
-  WITH_TOOLS=OFF
-  WITH_SNAPPY=ON
-  WITH_LZ4=ON
-  WITH_ZLIB=ON
-  WITH_ZSTD=ON
-  WITH_TOOLS=OFF
-  WITH_GFLAGS=OFF
-  WITH_TBB=ON
-  USE_RTTI=ON
-  ROCKSDB_BUILD_SHARED=OFF
-  WITH_JEMALLOC=${COMPILE_WITH_JEMALLOC}
-  PORTABLE=${PORTABLE}
-)
+        CMAKE_MODULE_PATH=${PROJECT_SOURCE_DIR}/cmake/modules # to locate FindJeMalloc.cmake
+        Snappy_DIR=${PROJECT_SOURCE_DIR}/cmake/modules # to locate SnappyConfig.cmake
+        FAIL_ON_WARNINGS=OFF
+        WITH_TESTS=OFF
+        WITH_BENCHMARK_TOOLS=OFF
+        WITH_CORE_TOOLS=OFF
+        WITH_TOOLS=OFF
+        WITH_SNAPPY=ON
+        WITH_LZ4=ON
+        WITH_ZLIB=ON
+        WITH_ZSTD=ON
+        WITH_TOOLS=OFF
+        WITH_GFLAGS=OFF
+        WITH_TBB=ON
+        USE_RTTI=ON
+        ROCKSDB_BUILD_SHARED=OFF
+        WITH_JEMALLOC=${COMPILE_WITH_JEMALLOC}
+        PORTABLE=${PORTABLE}
+        )
 
 add_library(rocksdb_with_headers INTERFACE)
 target_include_directories(rocksdb_with_headers INTERFACE ${rocksdb_SOURCE_DIR}/include)

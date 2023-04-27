@@ -47,6 +47,26 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   rocksdb::CompactionOptions co;
   co.compression = options.compression;
   co.max_subcompactions = svr_->GetConfig()->max_bg_migration;
+  if (meta_compact_sst_.size() > 0) {
+    auto rocks_s = storage_->GetDB()->CompactFiles(co, GetMetadataCFH(), meta_compact_sst_, options.num_levels - 1, -1,
+                                                   &compact_results);
+    if (!rocks_s.ok()) {
+      std::string file_str = "[";
+      for (const auto &file : compact_results) {
+        file_str = file_str + file + ",";
+      }
+      file_str.pop_back();
+      file_str += "]";
+      LOG(ERROR) << "Compaction Failed, meta file list:" << file_str;
+      return {Status::NotOK, rocks_s.ToString()};
+    }
+    s = SendRemoteSST(compact_results, Engine::kMetadataColumnFamilyName);
+    if (!s.IsOK()) {
+      return {s.GetCode(), "Send SST to remote failed, due to: " + s.Msg()};
+    }
+  }
+
+  compact_results.clear();
   if (subkey_compact_sst_.size() > 0) {
     auto rocks_s = storage_->GetDB()->CompactFiles(co, GetSubkeyCFH(), subkey_compact_sst_, options.num_levels - 1, -1,
                                                    &compact_results);
@@ -63,29 +83,11 @@ Status CompactAndMergeMigrate::SendSnapshot() {
     }
     s = SendRemoteSST(compact_results, Engine::kSubkeyColumnFamilyName);
     if (!s.IsOK()) {
+      return {s.GetCode(), "Send SST to remote failed, due to: " + s.Msg()};
       return s;
     }
   }
-
-  if (meta_compact_sst_.size() > 0) {
-    auto rocks_s = storage_->GetDB()->CompactFiles(co, GetMetadataCFH(), meta_compact_sst_, options.num_levels - 1, -1,
-                                                   &compact_results);
-    storage_->GetDB()->ContinueBackgroundWork();
-    if (!rocks_s.ok()) {
-      std::string file_str = "[";
-      for (const auto &file : compact_results) {
-        file_str = file_str + file + ",";
-      }
-      file_str.pop_back();
-      file_str += "]";
-      LOG(ERROR) << "Compaction Failed, meta file list:" << file_str;
-      return {Status::NotOK, rocks_s.ToString()};
-    }
-    s = SendRemoteSST(compact_results, Engine::kMetadataColumnFamilyName);
-    if (!s.IsOK()) {
-      return {s.GetCode(), "Send SST to remote failed, due to: " + s.Msg()};
-    }
-  }
+  storage_->GetDB()->ContinueBackgroundWork();
 
   return Status::OK();
 }
@@ -183,7 +185,7 @@ Status CompactAndMergeMigrate::PickSSTs() {
         if (compare_with_prefix(meta_sst.smallestkey, prefix) < 0 &&
             compare_with_prefix(meta_sst.largestkey, prefix) > 0) {
           std::cout << Slice(meta_sst.smallestkey).ToString(true) << " vs. " << prefix.ToString(true) << std::endl;
-          meta_compact_sst_.push_back(meta_sst.relative_filename);
+          meta_compact_sst_.push_back(meta_sst.name);
         }
       }
     }
@@ -199,7 +201,7 @@ Status CompactAndMergeMigrate::PickSSTs() {
 
         if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
             compare_with_prefix(sst_info.largestkey, prefix) > 0)
-          subkey_compact_sst_.push_back(sst_info.relative_filename);
+          subkey_compact_sst_.push_back(sst_info.name);
       }
     }
   }
@@ -248,17 +250,20 @@ Status CompactAndMergeMigrate::SendRemoteSST(std::vector<std::string> &file_list
   std::string file_str;
 
   for (auto &file_name : file_list) {
-    file_str = file_str + file_name + ",";
+    std::string rel_path = Util::Split(file_name, "/").back();
+    file_str = file_str + rel_path + ",";
   }
   file_str.pop_back();
   std::string cmds;
   cmds =
       Redis::MultiBulkString({"sst_ingest", "remote", column_family_name, file_str, svr_->cluster_->GetMyId()}, false);
-  current_pipeline_size_++;
-  s = SendCmdsPipelineIfNeed(&cmds, true);
+  s = Util::SockSend(slot_job_->slot_fd_, cmds);
   if (!s.IsOK()) {
-    LOG(ERROR) << "[" << this->GetName() << "] Send File Error, why: " << s.Msg();
-    return s;
+    return s.Prefixed("Failed to send command");
+  }
+  s = CheckResponseOnce(slot_job_->slot_fd_);
+  if (!s.IsOK()) {
+    return s.Prefixed("wrong response from the destination node");
   }
 
   LOG(INFO) << "[" << this->GetName() << "] Send File Success, total # of files: " << file_list.size()

@@ -95,7 +95,8 @@ class Cluster {
                     const std::function<void(const std::string, const uint32_t)> &fn);
   Status FetchFileFromRemote(const std::string &server_id, std::vector<std::string> &file_list,
                              const std::string &temp_dir);
-  Status IngestFiles(const std::string &column_family, std::vector<std::string> &files);
+  Status IngestFiles(const std::string &column_family, const std::vector<std::string> &files);
+
   bool IsWriteForbiddenSlot(int slot);
   Status CanExecByMySelf(const Redis::CommandAttributes *attributes, const std::vector<std::string> &cmd_tokens,
                          Redis::Connection *conn);

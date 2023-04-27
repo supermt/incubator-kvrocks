@@ -101,7 +101,7 @@ Status ParallelSlotMigrate::SetMigrationSlots(std::vector<int> &target_slots) {
   return Status::OK();
 }
 void ParallelSlotMigrate::Clean() {
-  LOG(INFO) << "[migrate] Clean resources of migrating slot " << slot_job_->migrate_slot_;
+  LOG(INFO) << "[" << GetName() << "] Clean resources of migrating slot " << slot_job_->migrate_slot_;
   if (slot_snapshot_) {
     storage_->GetDB()->ReleaseSnapshot(slot_snapshot_);
     slot_snapshot_ = nullptr;
