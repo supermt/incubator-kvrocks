@@ -923,22 +923,22 @@ Status Cluster::FetchFileFromRemote(const std::string &server_id, std::vector<st
   return Status::OK();
 }
 Status Cluster::IngestFiles(const std::string &column_family, const std::vector<std::string> &files) {
-  auto cfh = svr_->storage_->GetCFHandle(column_family);
-  rocksdb::IngestExternalFileOptions ing_options;
-  ing_options.allow_blocking_flush = false;
-  ing_options.allow_global_seqno = false;
-  //  ing_options.move_files = true;
-  auto start_ms = Util::GetTimeStampMS();
-
-  auto rocks_s = svr_->storage_->GetDB()->IngestExternalFile(cfh, files, ing_options);
-  auto end_ms = Util::GetTimeStampMS();
-
-  if (!rocks_s.ok()) {
-    LOG(INFO) << "Ingestion error, time(ms) take: " << end_ms - start_ms;
-    //    return Status::OK();
-    return {Status::NotOK, "Ingestion error" + rocks_s.ToString()};
-  }
-  LOG(INFO) << "Ingestion completed, time(ms) take: " << end_ms - start_ms;
+//  auto cfh = svr_->storage_->GetCFHandle(column_family);
+//  rocksdb::IngestExternalFileOptions ing_options;
+//  ing_options.allow_blocking_flush = false;
+//  ing_options.allow_global_seqno = false;
+//  //  ing_options.move_files = true;
+//  auto start_ms = Util::GetTimeStampMS();
+//
+//  auto rocks_s = svr_->storage_->GetDB()->IngestExternalFile(cfh, files, ing_options);
+//  auto end_ms = Util::GetTimeStampMS();
+//
+//  if (!rocks_s.ok()) {
+//    LOG(INFO) << "Ingestion error, time(ms) take: " << end_ms - start_ms;
+//    //    return Status::OK();
+//    return {Status::NotOK, "Ingestion error" + rocks_s.ToString()};
+//  }
+//  LOG(INFO) << "Ingestion completed, time(ms) take: " << end_ms - start_ms;
   return Status::OK();
 }
 int Cluster::OpenDataFileForMigrate(const std::string &remote_file_name, uint64_t *file_size) {

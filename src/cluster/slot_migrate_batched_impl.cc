@@ -257,13 +257,22 @@ Status CompactAndMergeMigrate::SendRemoteSST(std::vector<std::string> &file_list
   std::string cmds;
   cmds =
       Redis::MultiBulkString({"sst_ingest", "remote", column_family_name, file_str, svr_->cluster_->GetMyId()}, false);
-  s = Util::SockSend(slot_job_->slot_fd_, cmds);
+  auto fd = Util::SockConnect(dst_ip_, dst_port_);
+
+  if (!fd.IsOK()) {
+    return fd;
+  }
+  //  s = Util::SockSetBlocking(*fd, 1);
+  //  if (!s.IsOK()) {
+  //    return s;
+  //  }
+  s = Util::SockSend(*fd, cmds);
   if (!s.IsOK()) {
     return s.Prefixed("Failed to send command");
   }
-  s = CheckResponseOnce(slot_job_->slot_fd_);
+  s = CheckResponseOnce(*fd);
   if (!s.IsOK()) {
-    return s.Prefixed("wrong response from the destination node");
+    return s.Prefixed("Error in receiving ingestion results");
   }
 
   LOG(INFO) << "[" << this->GetName() << "] Send File Success, total # of files: " << file_list.size()

@@ -147,7 +147,8 @@ class CommandIngest : public Commander {
     } else if (remote_or_local_ == "remote") {
       LOG(INFO) << "Fetching data from remote server: " << server_id_;
       auto start = Util::GetTimeStampMS();
-      auto s = svr->cluster_->FetchFileFromRemote(server_id_, files, svr->GetConfig()->migration_sync_dir);
+      Status s = Status::OK();
+      s = svr->cluster_->FetchFileFromRemote(server_id_, files, svr->GetConfig()->migration_sync_dir);
       auto end = Util::GetTimeStampMS();
       if (!s.IsOK()) {
         LOG(ERROR) << "Fetching data error " << s.Msg();
@@ -246,7 +247,11 @@ class CommandSSTFetch : public Commander {
     if (auto s = Util::ThreadDetach(t); !s) {
       return s;
     }
-
+    //    s = Util::SockSetBlocking(repl_fd, 0);
+    //    if (!s.IsOK()) {
+    //      *output = s.Msg();
+    //      return s;
+    //    }
     return Status::OK();
   }
 
