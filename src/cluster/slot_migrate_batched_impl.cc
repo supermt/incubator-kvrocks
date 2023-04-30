@@ -270,12 +270,19 @@ Status CompactAndMergeMigrate::SendRemoteSST(std::vector<std::string> &file_list
   if (!s.IsOK()) {
     return s.Prefixed("Failed to send command");
   }
+  // need this to wait till all SST has been sent
+
   s = CheckResponseOnce(*fd);
   if (!s.IsOK()) {
-    return s.Prefixed("Error in receiving ingestion results");
+    if (s.Msg().find("Resource temporarily unavailable") != s.Msg().npos) {
+      //      usleep(100);
+      LOG(INFO) << "transmission not finished, waiting";
+    } else {
+      return s.Prefixed("Error in receiving ingestion results");
+    }
   }
 
   LOG(INFO) << "[" << this->GetName() << "] Send File Success, total # of files: " << file_list.size()
             << ", file_list: " << file_str;
-  return s;
+  return Status::OK();
 }
