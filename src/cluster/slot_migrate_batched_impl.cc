@@ -25,6 +25,7 @@
 #include "event_util.h"
 #include "fmt/format.h"
 #include "io_util.h"
+#include "rocksdb/sst_file_reader.h"
 #include "slot_migrate.h"
 #include "storage/batch_extractor.h"
 #include "storage/compact_filter.h"
@@ -48,6 +49,8 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   co.compression = options.compression;
   co.max_subcompactions = svr_->GetConfig()->max_bg_migration;
   if (meta_compact_sst_.size() > 0) {
+    auto start = Util::GetTimeStampMS();
+
     auto rocks_s = storage_->GetDB()->CompactFiles(co, GetMetadataCFH(), meta_compact_sst_, options.num_levels - 1, -1,
                                                    &compact_results);
     if (!rocks_s.ok()) {
@@ -60,7 +63,15 @@ Status CompactAndMergeMigrate::SendSnapshot() {
       LOG(ERROR) << "Compaction Failed, meta file list:" << file_str;
       return {Status::NotOK, rocks_s.ToString()};
     }
-    s = SendRemoteSST(compact_results, Engine::kMetadataColumnFamilyName);
+    auto end = Util::GetTimeStampMS();
+    LOG(INFO) << "Meta SST compacted, Time cost (ms): " << end - start;
+    std::vector<std::string> filtered_sst;
+
+    s = FilterMetaSSTs(compact_results, &filtered_sst);
+    if (!s.IsOK()) {
+      return s;
+    }
+    s = SendRemoteSST(filtered_sst, Engine::kMetadataColumnFamilyName);
     if (!s.IsOK()) {
       return {s.GetCode(), "Send SST to remote failed, due to: " + s.Msg()};
     }
@@ -68,6 +79,7 @@ Status CompactAndMergeMigrate::SendSnapshot() {
 
   compact_results.clear();
   if (subkey_compact_sst_.size() > 0) {
+    auto start = Util::GetTimeStampMS();
     auto rocks_s = storage_->GetDB()->CompactFiles(co, GetSubkeyCFH(), subkey_compact_sst_, options.num_levels - 1, -1,
                                                    &compact_results);
 
@@ -81,7 +93,16 @@ Status CompactAndMergeMigrate::SendSnapshot() {
       LOG(ERROR) << "Compaction Failed, meta file list:" << file_str;
       return {Status::NotOK, rocks_s.ToString()};
     }
-    s = SendRemoteSST(compact_results, Engine::kSubkeyColumnFamilyName);
+
+    auto end = Util::GetTimeStampMS();
+    LOG(INFO) << "Subkey SST compacted, Time cost (ms): " << end - start;
+
+    std::vector<std::string> filtered_sst;
+    s = FilterSubkeySSTs(compact_results, &filtered_sst);
+    if (!s.IsOK()) {
+      return s;
+    }
+    s = SendRemoteSST(filtered_sst, Engine::kSubkeyColumnFamilyName);
     if (!s.IsOK()) {
       return {s.GetCode(), "Send SST to remote failed, due to: " + s.Msg()};
       return s;
@@ -151,11 +172,7 @@ Status CompactAndMergeMigrate::MigrateStart(Server *svr, const std::string &node
     std::string prefix;
     ComposeSlotKeyPrefix(namespace_, slot, &prefix);
     slot_prefix_list_.push_back(prefix);
-
-    //    std::cout << "Slot prefix: " << prefix << " hex:" << Slice(prefix).ToString(true) << std::endl;
     subkey_prefix_list_.emplace_back(ExtractSubkeyPrefix(Slice(slot_prefix_list_.back())));
-    //    std::cout << "Slot prefix: " << subkey_prefix_list_.back()
-    //              << " hex:" << Slice(subkey_prefix_list_.back()).ToString(true) << std::endl;
   }
 
   auto job = std::make_unique<SlotMigrateJob>(migrate_slots_, dst_ip, dst_port, 0, 16, seq_gap);
@@ -192,6 +209,9 @@ Status CompactAndMergeMigrate::PickSSTs() {
   }
 
   rocksdb::ColumnFamilyMetaData subkeycf_ssts;
+  // sort the prefix to avoid repeat searching
+  std::sort(subkey_prefix_list_.begin(), subkey_prefix_list_.end());
+
   svr_->storage_->GetDB()->GetColumnFamilyMetaData(GetSubkeyCFH(), &subkeycf_ssts);
   for (const auto &level_stat : subkeycf_ssts.levels) {
     for (const auto &sst_info : level_stat.files) {
@@ -275,7 +295,7 @@ Status CompactAndMergeMigrate::SendRemoteSST(std::vector<std::string> &file_list
   s = CheckResponseOnce(*fd);
   if (!s.IsOK()) {
     if (s.Msg().find("Resource temporarily unavailable") != s.Msg().npos) {
-      //      usleep(100);
+      usleep(100);
       LOG(INFO) << "transmission not finished, waiting";
     } else {
       return s.Prefixed("Error in receiving ingestion results");
@@ -284,5 +304,95 @@ Status CompactAndMergeMigrate::SendRemoteSST(std::vector<std::string> &file_list
 
   LOG(INFO) << "[" << this->GetName() << "] Send File Success, total # of files: " << file_list.size()
             << ", file_list: " << file_str;
+  return Status::OK();
+}
+Status CompactAndMergeMigrate::FilterMetaSSTs(const std::vector<std::string> &input_list,
+                                              std::vector<std::string> *output_list) {
+  auto opt = svr_->storage_->GetDB()->GetOptions();
+  std::cout << opt.compression << std::endl;
+  rocksdb::SstFileReader sst_file_reader(opt);
+  rocksdb::ReadOptions ropts;
+  rocksdb::SstFileWriter writer(rocksdb::EnvOptions(opt), opt, GetMetadataCFH());
+  uint64_t valid = 0;
+  auto start = Util::GetTimeStampMS();
+  for (auto &file : input_list) {
+    // Create SST reader
+    auto ros = sst_file_reader.Open(file);  // rocksdb open status;
+    if (!ros.ok()) {
+      return {Status::NotOK, "failed on reading" + ros.ToString()};
+    }
+    auto out_name = file + ".bck";
+    output_list->push_back(out_name);
+    ros = writer.Open(out_name);
+    if (!ros.ok()) {
+      return {Status::NotOK, "failed on writing" + ros.ToString()};
+    }
+    std::unique_ptr<rocksdb::Iterator> iter(sst_file_reader.NewIterator(ropts));
+    iter->SeekToFirst();
+    for (; iter->Valid(); iter->Next()) {
+      // meta family, with specific prefix
+      for (const auto &prefix : slot_prefix_list_) {
+        if (iter->key().starts_with(prefix)) {
+          writer.Put(iter->key(), iter->value());
+          valid++;
+        }
+      }
+    }
+    ros = writer.Finish();
+    if (!ros.ok()) {
+      return {Status::NotOK, "Write out error, " + ros.ToString()};
+    }
+    // end of reading file
+  }
+  auto end = Util::GetTimeStampMS();
+  LOG(INFO) << "Meta SST filtered, # of valid entries: " << valid << ", time taken (ms): " << end - start;
+  return Status::OK();
+}
+Status CompactAndMergeMigrate::FilterSubkeySSTs(const std::vector<std::string> &input_list,
+                                                std::vector<std::string> *output_list) {
+  auto opt = svr_->storage_->GetDB()->GetOptions();
+  rocksdb::SstFileReader sst_file_reader(opt);
+  rocksdb::ReadOptions ropts;
+  rocksdb::SstFileWriter writer(rocksdb::EnvOptions(opt), opt);
+  uint64_t valid = 0;
+  auto start = Util::GetTimeStampMS();
+
+  for (auto file : input_list) {
+    auto ros = sst_file_reader.Open(file);  // rocksdb open status;
+    if (!ros.ok()) {
+      return {Status::NotOK, "failed on reading" + ros.ToString()};
+    }
+    auto out_name = file + ".bck";
+    output_list->push_back(out_name);
+    ros = writer.Open(out_name);
+
+    std::unique_ptr<rocksdb::Iterator> iter(sst_file_reader.NewIterator(ropts));
+    iter->SeekToFirst();
+    auto smallest = iter->key();
+    std::string smallest_prefix;
+    // find the smallest prefix that is larger than this smallest value;
+    for (const auto &prefix : subkey_prefix_list_) {
+      if (compare_with_prefix(smallest, prefix) < 0) {
+        smallest_prefix = prefix;
+        break;
+      }
+    }
+    for (; iter->Valid(); iter->Next()) {
+      //      auto cur_key = iter->key();
+      //      if (compare_with_prefix(cur_key, smallest_prefix) < 0) {
+      //        // it's in the range
+      //        valid++;
+      //        writer.Put(iter->key(), iter->value());
+      //      }
+      writer.Put(iter->key(), iter->value());
+    }  // end of entry scanning
+
+    ros = writer.Finish();
+    if (!ros.ok()) {
+      return {Status::NotOK, "Write out error, " + ros.ToString()};
+    }
+  }
+  auto end = Util::GetTimeStampMS();
+  LOG(INFO) << "Subkey SSTs filtered, # of valid entries: " << valid << ", time taken (ms): " << end - start;
   return Status::OK();
 }

@@ -31,6 +31,7 @@
 
 #include "commands/commander.h"
 #include "redis_slot.h"
+#include "replication.h"
 #include "server/redis_connection.h"
 #include "status.h"
 
@@ -89,10 +90,10 @@ class Cluster {
   bool IsNotMaster();
   int OpenDataFileForMigrate(const std::string &remote_file_name, uint64_t *file_size);
 
-  Status fetchFile(int sock_fd, evbuffer *evbuf, const std::string &dir, const std::string &file, uint32_t crc,
-                   const std::function<void(const std::string, const uint32_t)> &fn);
+  Status fetchFile(int sock_fd, evbuffer *evbuf, const std::string &dir, const std::string &file,
+                   const fetch_file_callback &fn);
   Status fetchFiles(int sock_fd, const std::string &dir, const std::vector<std::string> &files,
-                    const std::function<void(const std::string, const uint32_t)> &fn);
+                    const fetch_file_callback &fn);
   Status FetchFileFromRemote(const std::string &server_id, std::vector<std::string> &file_list,
                              const std::string &temp_dir);
   Status IngestFiles(const std::string &column_family, const std::vector<std::string> &files);

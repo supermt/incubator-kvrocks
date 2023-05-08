@@ -250,9 +250,12 @@ class CompactAndMergeMigrate : public SlotMigrate {
     input.erase(pos, input.end());
     return input;
   }
-  inline int compare_with_prefix(const std::string &x, rocksdb::Slice &prefix) {
+  inline int compare_with_prefix(const std::string &x, const rocksdb::Slice &prefix) {
     rocksdb::Slice x_slice(x);
     return memcmp(x_slice.data_, prefix.data_, prefix.size_);
+  }
+  inline int compare_with_prefix(Slice &x, const rocksdb::Slice &prefix) {
+    return memcmp(x.data_, prefix.data_, prefix.size_);
   }
 
  private:
@@ -270,6 +273,8 @@ class CompactAndMergeMigrate : public SlotMigrate {
   rocksdb::ColumnFamilyHandle *GetMetadataCFH();
   rocksdb::ColumnFamilyHandle *GetSubkeyCFH();
   Status SendRemoteSST(std::vector<std::string> &file_list, const std::string &column_family);
+  Status FilterMetaSSTs(const std::vector<std::string> &input_list, std::vector<std::string> *output_list);
+  Status FilterSubkeySSTs(const std::vector<std::string> &input_list, std::vector<std::string> *output_list);
   //  rocksdb::DB *compact_ptr;
   std::vector<std::string> slot_prefix_list_;
   std::vector<std::string> subkey_prefix_list_;

@@ -33,6 +33,7 @@
 #include "io_util.h"
 #include "parse_util.h"
 #include "replication.h"
+#include "rocksdb/sst_file_reader.h"
 #include "rocksdb_crc32c.h"
 #include "server/server.h"
 #include "string_util.h"
@@ -859,11 +860,11 @@ Status Cluster::FetchFileFromRemote(const std::string &server_id, std::vector<st
   auto port = target_server->port_;
   auto ip = target_server->host_;
 
-  size_t concurrency = 1;
-  if (file_list.size() > 20) {
-    // Use 4 threads to download files in parallel
-    concurrency = 4;
-  }
+  size_t concurrency = 4;
+//  if (file_list.size() > 20) {
+//    // Use 4 threads to download files in parallel
+//    concurrency = 4;
+//  }
   std::string file_str = "[ ";
   for (auto &file : file_list) {
     file_str += file + ",";
@@ -924,19 +925,16 @@ Status Cluster::FetchFileFromRemote(const std::string &server_id, std::vector<st
 }
 Status Cluster::IngestFiles(const std::string &column_family, const std::vector<std::string> &files) {
   auto cfh = svr_->storage_->GetCFHandle(column_family);
-
+  rocksdb::Options opt = svr_->storage_->GetDB()->GetOptions();
   rocksdb::IngestExternalFileOptions ifo;
-  bool allow_global_seqno = true;
-  bool write_global_seqno = false;
-  bool verify_checksums_before_ingest = false;
-  bool ingest_behind = false;
-  ifo.allow_global_seqno = allow_global_seqno;
-  ifo.write_global_seqno = allow_global_seqno ? write_global_seqno : false;
-  ifo.verify_checksums_before_ingest = verify_checksums_before_ingest;
-  ifo.ingest_behind = ingest_behind;
+  ifo.allow_global_seqno = true;
+  ifo.write_global_seqno = true;
+  ifo.verify_checksums_before_ingest = false;
+  ifo.ingest_behind = false;
 
   //  ing_options.move_files = true;
   auto start_ms = Util::GetTimeStampMS();
+  // Read and Extract Records
 
   auto rocks_s = svr_->storage_->GetDB()->IngestExternalFile(cfh, files, ifo);
   auto end_ms = Util::GetTimeStampMS();
@@ -995,7 +993,7 @@ Status Cluster::fetchFiles(int sock_fd, const std::string &dir, const std::vecto
   for (const auto &file : files) {
     auto start = Util::GetTimeStampMS();
     LOG(INFO) << "[fetch] Start to fetch file " << file;
-    s = fetchFile(sock_fd, evbuf.get(), dir, file, 0, fn);
+    s = fetchFile(sock_fd, evbuf.get(), dir, file, fn);
     if (!s.IsOK()) {
       s = Status(Status::NotOK, "fetch file err: " + s.Msg());
       LOG(WARNING) << "[fetch] Fail to fetch file " << file << ", err: " << s.Msg();
@@ -1010,7 +1008,7 @@ Status Cluster::fetchFiles(int sock_fd, const std::string &dir, const std::vecto
   }
   return s;
 }
-Status Cluster::fetchFile(int sock_fd, evbuffer *evbuf, const std::string &dir, const std::string &file, uint32_t crc,
+Status Cluster::fetchFile(int sock_fd, evbuffer *evbuf, const std::string &dir, const std::string &file,
                           const std::function<void(const std::string, const uint32_t)> &fn) {
   size_t file_size = 0;
 
@@ -1056,13 +1054,6 @@ Status Cluster::fetchFile(int sock_fd, evbuffer *evbuf, const std::string &dir, 
       }
     }
   }
-  // Verify file crc checksum if crc is not 0
-  if (crc && crc != tmp_crc) {
-    return {Status::NotOK, fmt::format("CRC mismatched, {} was expected but got {}", crc, tmp_crc)};
-  }
-
-  // Call fetch file callback function
-  fn(file, crc);
   // move tmp file to file
   auto s = Engine::Storage::ReplDataManager::SwapTmpFile(svr_->storage_, dir, file);
   if (!s.IsOK()) return {Status::NotOK, "Mv Tmp error"};
