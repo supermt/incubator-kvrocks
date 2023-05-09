@@ -164,7 +164,8 @@ class CommandIngest : public Commander {
         }
       }));
 
-      t.detach();
+      //      t.detach();
+      t.join();
 
       //      auto t = GET_OR_RET(svr->cluster_->IngestFiles(column_family_name_, ingest_files));
 
