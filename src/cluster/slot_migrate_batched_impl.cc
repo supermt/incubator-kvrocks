@@ -194,14 +194,12 @@ Status CompactAndMergeMigrate::PickSSTs() {
   //  auto iter = DBUtil::UniqueIterator(storage_->GetDB()->NewIterator(read_options, meta_cf_handle));
   rocksdb::ColumnFamilyMetaData metacf_ssts;
   svr_->storage_->GetDB()->GetColumnFamilyMetaData(meta_cf_handle, &metacf_ssts);
-  std::cout << "Picking SSTs" << std::endl;
 
   for (const auto &meta_level_stat : metacf_ssts.levels) {
     for (const auto &meta_sst : meta_level_stat.files) {
       for (Slice prefix : slot_prefix_list_) {
         if (compare_with_prefix(meta_sst.smallestkey, prefix) < 0 &&
             compare_with_prefix(meta_sst.largestkey, prefix) > 0) {
-          std::cout << Slice(meta_sst.smallestkey).ToString(true) << " vs. " << prefix.ToString(true) << std::endl;
           meta_compact_sst_.push_back(meta_sst.name);
         }
       }
@@ -216,9 +214,6 @@ Status CompactAndMergeMigrate::PickSSTs() {
   for (const auto &level_stat : subkeycf_ssts.levels) {
     for (const auto &sst_info : level_stat.files) {
       for (Slice prefix : subkey_prefix_list_) {
-        std::cout << Slice(sst_info.smallestkey).ToString(true) << " vs. " << prefix.ToString(true)
-                  << " result: " << compare_with_prefix(sst_info.smallestkey, prefix) << std::endl;
-
         if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
             compare_with_prefix(sst_info.largestkey, prefix) > 0)
           subkey_compact_sst_.push_back(sst_info.name);
@@ -267,49 +262,52 @@ std::string CompactAndMergeMigrate::ExtractSubkeyPrefix(const Slice &slot_prefix
 Status CompactAndMergeMigrate::SendRemoteSST(std::vector<std::string> &file_list,
                                              const std::string &column_family_name) {
   Status s;
+  std::string source_ssts;
   std::string file_str;
-
   for (auto &file_name : file_list) {
-    std::string rel_path = Util::Split(file_name, "/").back();
-    file_str = file_str + rel_path + ",";
+    source_ssts += ((file_name) + " ");
+    file_str += (Util::Split(file_name, "/").back() + ",");
   }
+  source_ssts.pop_back();
   file_str.pop_back();
+  LOG(INFO) << "Sending files: " << source_ssts;
+
   std::string cmds;
+  auto source_space = svr_->GetConfig()->migration_sync_dir + "/" + std::to_string(svr_->GetConfig()->port);
+  auto target_space = svr_->GetConfig()->migration_sync_dir + "/" + std::to_string(dst_port_);
+  cmds = "ls " + source_ssts + " |xargs -n 1 basename| parallel -v -j8 rsync -raz " + source_space + "/{} " +
+         svr_->GetConfig()->migration_user + "@" + dst_ip_ + ":" + target_space + "/{}";
+  LOG(INFO) << cmds;
+  int status = system(cmds.c_str());
+  if (status < 0) {
+    LOG(ERROR) << "Rsync send file error: " << strerror(errno) << '\n';
+    return {Status::NotOK, fmt::format("Rsync send file error: {}", strerror(errno))};
+  }
+
   cmds =
-      Redis::MultiBulkString({"sst_ingest", "remote", column_family_name, file_str, svr_->cluster_->GetMyId()}, false);
+      Redis::MultiBulkString({"sst_ingest", "local", column_family_name, file_str, svr_->cluster_->GetMyId()}, false);
+
   auto fd = Util::SockConnect(dst_ip_, dst_port_);
 
   if (!fd.IsOK()) {
     return fd;
   }
-  //  s = Util::SockSetBlocking(*fd, 1);
-  //  if (!s.IsOK()) {
-  //    return s;
-  //  }
-  s = Util::SockSend(*fd, cmds);
-  if (!s.IsOK()) {
-    return s.Prefixed("Failed to send command");
-  }
-  // need this to wait till all SST has been sent
 
+  s = Util::SockSend(*fd, cmds);
+
+  if (!s.IsOK()) {
+    return s;
+  }
   s = CheckResponseOnce(*fd);
   if (!s.IsOK()) {
-    if (s.Msg().find("Resource temporarily unavailable") != s.Msg().npos) {
-      usleep(100);
-      LOG(INFO) << "transmission not finished, waiting";
-    } else {
-      return s.Prefixed("Error in receiving ingestion results");
-    }
+    return s;
   }
 
-  LOG(INFO) << "[" << this->GetName() << "] Send File Success, total # of files: " << file_list.size()
-            << ", file_list: " << file_str;
   return Status::OK();
 }
 Status CompactAndMergeMigrate::FilterMetaSSTs(const std::vector<std::string> &input_list,
                                               std::vector<std::string> *output_list) {
   auto opt = svr_->storage_->GetDB()->GetOptions();
-  std::cout << opt.compression << std::endl;
   rocksdb::SstFileReader sst_file_reader(opt);
   rocksdb::ReadOptions ropts;
   rocksdb::SstFileWriter writer(rocksdb::EnvOptions(opt), opt, GetMetadataCFH());
@@ -321,7 +319,8 @@ Status CompactAndMergeMigrate::FilterMetaSSTs(const std::vector<std::string> &in
     if (!ros.ok()) {
       return {Status::NotOK, "failed on reading" + ros.ToString()};
     }
-    auto out_name = file + ".bck";
+    auto sst_name = Util::Split(file, "/").back();
+    auto out_name = svr_->GetConfig()->migration_sync_dir + std::to_string(svr_->GetConfig()->port) + "/" + sst_name;
     output_list->push_back(out_name);
     ros = writer.Open(out_name);
     if (!ros.ok()) {
@@ -362,7 +361,10 @@ Status CompactAndMergeMigrate::FilterSubkeySSTs(const std::vector<std::string> &
     if (!ros.ok()) {
       return {Status::NotOK, "failed on reading" + ros.ToString()};
     }
-    auto out_name = file + ".bck";
+    //    rocksdb::Env::Default()->CreateDirIfMissing(svr_->GetConfig()->migration_sync_dir);
+    auto sst_name = Util::Split(file, "/").back();
+    auto out_name = svr_->GetConfig()->migration_sync_dir + std::to_string(svr_->GetConfig()->port) + "/" + sst_name;
+
     output_list->push_back(out_name);
     ros = writer.Open(out_name);
 
