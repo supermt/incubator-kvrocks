@@ -205,14 +205,29 @@ void SlotMigrate::RunStateMachine() {
         break;
       }
       case kSlotMigrateWal: {
-        auto s = SyncWal();
-        if (s.IsOK()) {
-          LOG(INFO) << "[migrate] Succeed to sync WAL for a slot " << slot_info;
-          state_machine_ = kSlotMigrateSuccess;
+        if (IsBatched()) {
+          for (auto slot : slot_job_->slots_) {
+            migrate_slot_ = slot;
+            auto s = SyncWal();
+            if (s.IsOK()) {
+              LOG(INFO) << "[migrate] Succeed to sync WAL for a slot " << slot_info;
+              state_machine_ = kSlotMigrateSuccess;
+            } else {
+              LOG(ERROR) << "[migrate] Failed to sync WAL for a slot " << slot_info << ". Error: " << s.Msg();
+              state_machine_ = kSlotMigrateFailed;
+            }
+          }
         } else {
-          LOG(ERROR) << "[migrate] Failed to sync WAL for a slot " << slot_info << ". Error: " << s.Msg();
-          state_machine_ = kSlotMigrateFailed;
+          auto s = SyncWal();
+          if (s.IsOK()) {
+            LOG(INFO) << "[migrate] Succeed to sync WAL for a slot " << slot_info;
+            state_machine_ = kSlotMigrateSuccess;
+          } else {
+            LOG(ERROR) << "[migrate] Failed to sync WAL for a slot " << slot_info << ". Error: " << s.Msg();
+            state_machine_ = kSlotMigrateFailed;
+          }
         }
+
         break;
       }
       case kSlotMigrateSuccess: {
@@ -352,10 +367,6 @@ Status SlotMigrate::SendSnapshot() {
 
 Status SlotMigrate::SyncWal() {
   // Send incremental data in WAL circularly until new increment less than a certain amount
-  if (svr_->GetConfig()->migrate_method > kSeekAndInsertBatched) {
-    LOG(INFO) << "[" << this->GetName() << "], current migration method uses double writing, can skip the WAL syncing";
-    return Status::OK();
-  }
 
   auto s = SyncWalBeforeForbidSlot();
   if (!s.IsOK()) {
@@ -536,7 +547,7 @@ Status SlotMigrate::CheckResponseWithCounts(int sock_fd, int total) {
         case ParserState::ArrayLen: {
           UniqueEvbufReadln line(evbuf.get(), EVBUFFER_EOL_CRLF_STRICT);
           if (!line) {
-            LOG(INFO) << "[migrate] Event buffer is empty, read socket again";
+            //            LOG(INFO) << "[migrate] Event buffer is empty, read socket again";
             run = false;
             break;
           }
