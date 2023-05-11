@@ -330,12 +330,12 @@ Status CompactAndMergeMigrate::FilterMetaSSTs(const std::vector<std::string> &in
     iter->SeekToFirst();
     for (; iter->Valid(); iter->Next()) {
       // meta family, with specific prefix
-      for (const auto &prefix : slot_prefix_list_) {
-        if (iter->key().starts_with(prefix)) {
-          writer.Put(iter->key(), iter->value());
-          valid++;
-        }
-      }
+      //      for (const auto &prefix : slot_prefix_list_) {
+      //        if (iter->key().starts_with(prefix)) {
+      writer.Put(iter->key(), iter->value());
+      //          valid++;
+      //        }
+      //      }
     }
     ros = writer.Finish();
     if (!ros.ok()) {
