@@ -905,15 +905,35 @@ class CommandSlaveOf : public Commander {
   uint32_t port_ = 0;
 };
 
-class CommandStats : public Commander {
+class CommandOPStats : public Commander {
  public:
   Status Execute(Server *svr, Connection *conn, std::string *output) override {
-    std::string stats_json = svr->GetRocksDBStatsJson();
+    std::string stats_json = svr->GetRocksOPStatsJson();
     *output = Redis::BulkString(stats_json);
     return Status::OK();
   }
 };
 
+class CommandDBStats : public Commander {
+ public:
+  Status Execute(Server *svr, Connection *conn, std::string *output) override {
+    std::string db_stat = svr->GetRocksDBStatsJson();
+    *output = Redis::BulkString(db_stat);
+    return Status::OK();
+  }
+};
+
+class CommandStats : public Commander {
+ public:
+  Status Execute(Server *svr, Connection *conn, std::string *output) override {
+    std::string db_stat = svr->GetRocksDBStatsJson();
+    std::string stats_json = svr->GetRocksOPStatsJson();
+    *output = Redis::BulkString(stats_json);
+    *output += Redis::BulkString(db_stat);
+
+    return Status::OK();
+  }
+};
 REDIS_REGISTER_COMMANDS(MakeCmdAttr<CommandAuth>("auth", 2, "read-only ok-loading", 0, 0, 0),
                         MakeCmdAttr<CommandPing>("ping", -1, "read-only", 0, 0, 0),
                         MakeCmdAttr<CommandSelect>("select", 2, "read-only", 0, 0, 0),
@@ -943,6 +963,8 @@ REDIS_REGISTER_COMMANDS(MakeCmdAttr<CommandAuth>("auth", 2, "read-only ok-loadin
                         MakeCmdAttr<CommandBGSave>("bgsave", 1, "read-only no-script", 0, 0, 0),
                         MakeCmdAttr<CommandFlushBackup>("flushbackup", 1, "read-only no-script", 0, 0, 0),
                         MakeCmdAttr<CommandSlaveOf>("slaveof", 3, "read-only exclusive no-script", 0, 0, 0),
+                        MakeCmdAttr<CommandOPStats>("opstats", 1, "read-only", 0, 0, 0),
+                        MakeCmdAttr<CommandDBStats>("dbstats", 1, "read-only", 0, 0, 0),
                         MakeCmdAttr<CommandStats>("stats", 1, "read-only", 0, 0, 0), )
 
 }  // namespace Redis

@@ -1139,8 +1139,7 @@ void Server::GetInfo(const std::string &ns, const std::string &section, std::str
 
   *info = string_stream.str();
 }
-
-std::string Server::GetRocksDBStatsJson() {
+std::string Server::GetRocksOPStatsJson() {
   std::string output;
 
   output.reserve(8 * 1024);
@@ -1162,6 +1161,13 @@ std::string Server::GetRocksDBStatsJson() {
   output.append("}");
   output.shrink_to_fit();
 
+  return output;
+}
+
+std::string Server::GetRocksDBStatsJson() {
+  std::string output;
+  storage_->GetDB()->GetProperty("rocksdb.stats", &output);
+  output.shrink_to_fit();
   return output;
 }
 

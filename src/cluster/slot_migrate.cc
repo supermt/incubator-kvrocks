@@ -398,7 +398,7 @@ Status SlotMigrate::Success() {
   //  std::cout << "Is batched? " << IsBatched() << " slot size: " << migrate_slots_.size();
   if (IsBatched() && !migrate_slots_.empty()) {
     for (auto slot : migrate_slots_) {
-      std::cout << "Is batched? " << IsBatched() << " slot size: " << migrate_slots_.size();
+      //      std::cout << "Is batched? " << IsBatched() << " slot size: " << migrate_slots_.size();
       s = svr_->cluster_->SetSlotMigrated(slot, dst_ip_port);
       if (!s.IsOK()) return s.Prefixed(fmt::format("failed to set slot {} as migrated to {}", slot, dst_ip_port));
     }

@@ -175,6 +175,7 @@ class Server {
   void GetRoleInfo(std::string *info);
   void GetCommandsStatsInfo(std::string *info);
   void GetInfo(const std::string &ns, const std::string &section, std::string *info);
+  std::string GetRocksOPStatsJson();
   std::string GetRocksDBStatsJson();
   ReplState GetReplicationState();
 

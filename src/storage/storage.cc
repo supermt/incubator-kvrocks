@@ -122,7 +122,9 @@ rocksdb::Options Storage::InitRocksDBOptions() {
   // options.IncreaseParallelism(2);
   // NOTE: the overhead of statistics is 5%-10%, so it should be configurable in prod env
   // See: https://github.com/facebook/rocksdb/wiki/Statistics
+
   options.statistics = rocksdb::CreateDBStatistics();
+  options.statistics->set_stats_level(static_cast<rocksdb::StatsLevel>(rocksdb::kExceptDetailedTimers));
   options.stats_dump_period_sec = config_->RocksDB.stats_dump_period_sec;
   options.max_open_files = config_->RocksDB.max_open_files;
   options.compaction_style = rocksdb::CompactionStyle::kCompactionStyleLevel;
