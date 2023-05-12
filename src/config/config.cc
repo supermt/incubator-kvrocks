@@ -131,7 +131,8 @@ Config::Config() {
       {"dir", true, new StringField(&dir, "/tmp/kvrocks")},
       {"backup-dir", false, new StringField(&backup_dir, "")},
       {"log-dir", true, new StringField(&log_dir, "")},
-      {"migration_sync_dir", true, new StringField(&migration_sync_dir, "/tmp/migration_sync/")},
+      {"migration_sync_dir", true, new StringField(&migration_sync_dir, "migration_sync")},
+      {"global_migration_sync_dir", true, new StringField(&global_migration_sync_dir, "/tmp/migration_sync/")},
       {"migration_user", true, new StringField(&migration_user, "supermt")},
       {"log-level", true, new EnumField(&log_level, log_levels, google::INFO)},
       {"pidfile", true, new StringField(&pidfile, "")},
@@ -159,6 +160,7 @@ Config::Config() {
       {"cluster-enabled", true, new YesNoField(&cluster_enabled, false)},
       {"migrate-speed", false, new IntField(&migrate_speed, 4096, 0, INT_MAX)},
       {"migrate-method", false, new IntField(&migrate_method, kSeekAndInsert, kSeekAndInsert, kInvalidMigration)},
+      {"file-method", false, new IntField(&sst_transport_method, kNetwork, kNetwork, kInvalidFile)},
       {"migrate-pipeline-size", false, new IntField(&pipeline_size, 16, 1, INT_MAX)},
       {"migrate-sequence-gap", false, new IntField(&sequence_gap, 10000, 1, INT_MAX)},
       {"unixsocket", true, new StringField(&unixsocket, "")},
@@ -350,10 +352,7 @@ void Config::initFieldCallback() {
          checkpoint_dir = dir + "/checkpoint";
          sync_checkpoint_dir = dir + "/sync_checkpoint";
          backup_sync_dir = dir + "/backup_for_sync";
-         auto ros = rocksdb::Env::Default()->CreateDirIfMissing(migration_sync_dir + std::to_string(port) + "/");
-         if (!ros.ok()) {
-           return {Status::NotOK, ros.ToString()};
-         }
+         migration_sync_dir = dir + "/migration_sync";
          return Status::OK();
        }},
       {"backup-dir",

@@ -53,6 +53,9 @@ enum MigrationStrategy : int {
   kLevelMigration = 3,
   kInvalidMigration
 };
+
+enum SSTTransferMethod : int { kNetwork = 0, kSCP = 1, kInvalidFile };
+
 constexpr const size_t KiB = 1024L;
 constexpr const size_t MiB = 1024L * KiB;
 constexpr const size_t GiB = 1024L * MiB;
@@ -125,6 +128,7 @@ struct Config {
   std::string backup_dir;  // GUARD_BY(backup_mu_)
   std::string backup_sync_dir;
   std::string migration_sync_dir;
+  std::string global_migration_sync_dir;
   std::string migration_user;
   std::string checkpoint_dir;
   std::string sync_checkpoint_dir;
@@ -151,6 +155,7 @@ struct Config {
   int pipeline_size;
   int sequence_gap;
   int migrate_method = kSeekAndInsert;
+  int sst_transport_method = kNetwork;
   int max_bg_migration = 4;
 
   int log_retention_days;

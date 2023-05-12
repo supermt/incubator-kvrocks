@@ -1752,7 +1752,11 @@ Status Server::ChooseMigrationMethod() {
       default:
         return {Status::NotOK, "Current Migration method is not supported"};
     }
-
+    const std::string global_tmp = config_->global_migration_sync_dir + std::to_string(config_->port);
+    s = Engine::MkdirRecursively(rocksdb::Env::Default(), global_tmp);
+    if (!s.IsOK()) {
+      return s.Prefixed("failed to create migration parking");
+    }
     //    slot_import_ = std::make_unique<SlotImport>(this);
     // Create migrating thread
     s = slot_migrate_->CreateMigrateHandleThread();

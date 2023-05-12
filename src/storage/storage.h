@@ -64,6 +64,7 @@ constexpr const char *kPropagateScriptCommand = "script";
 
 constexpr const char *kLuaFunctionPrefix = "lua_f_";
 
+Status MkdirRecursively(rocksdb::Env *env, const std::string &dir);
 class Storage {
  public:
   explicit Storage(Config *config);

@@ -272,38 +272,75 @@ Status CompactAndMergeMigrate::SendRemoteSST(std::vector<std::string> &file_list
   file_str.pop_back();
   LOG(INFO) << "Sending files: " << source_ssts;
 
-  std::string cmds;
-  auto source_space = svr_->GetConfig()->migration_sync_dir + "/" + std::to_string(svr_->GetConfig()->port);
-  auto target_space = svr_->GetConfig()->migration_sync_dir + "/" + std::to_string(dst_port_);
-  cmds = "ls " + source_ssts + " |xargs -n 1 basename| parallel -v -j8 rsync -raz " + source_space + "/{} " +
-         svr_->GetConfig()->migration_user + "@" + dst_ip_ + ":" + target_space + "/{}";
-  LOG(INFO) << cmds;
-  int status = system(cmds.c_str());
-  if (status < 0) {
-    LOG(ERROR) << "Rsync send file error: " << strerror(errno) << '\n';
-    return {Status::NotOK, fmt::format("Rsync send file error: {}", strerror(errno))};
+  switch (svr_->GetConfig()->sst_transport_method) {
+    case kNetwork: {
+      std::string cmds;
+      std::string file_str;
+
+      for (auto &file_name : file_list) {
+        std::string rel_path = Util::Split(file_name, "/").back();
+        file_str = file_str + rel_path + ",";
+      }
+      file_str.pop_back();
+      cmds = Redis::MultiBulkString({"sst_ingest", "remote", column_family_name, file_str, svr_->cluster_->GetMyId()},
+                                    false);
+
+      auto fd = Util::SockConnect(dst_ip_, dst_port_);
+      if (!fd.IsOK()) {
+        return fd;
+      }
+
+      s = Util::SockSend(*fd, cmds);
+
+      if (!s.IsOK()) {
+        return s;
+      }
+      s = CheckResponseOnce(*fd);
+      if (!s.IsOK()) {
+        return s;
+      }
+
+      return Status::OK();
+    }
+    case kSCP: {
+      std::string cmds;
+
+      auto source_space = svr_->GetConfig()->global_migration_sync_dir + "/" + std::to_string(svr_->GetConfig()->port);
+      auto target_space = svr_->GetConfig()->global_migration_sync_dir + "/" + std::to_string(dst_port_);
+      cmds = "ls " + source_ssts + " |xargs -n 1 basename| parallel -v -j8 rsync -raz " + source_space + "/{} " +
+             svr_->GetConfig()->migration_user + "@" + dst_ip_ + ":" + target_space + "/{}";
+      LOG(INFO) << cmds;
+      int status = system(cmds.c_str());
+      if (status < 0) {
+        LOG(ERROR) << "Rsync send file error: " << strerror(errno) << '\n';
+        return {Status::NotOK, fmt::format("Rsync send file error: {}", strerror(errno))};
+      }
+
+      cmds = Redis::MultiBulkString({"sst_ingest", "local", column_family_name, file_str, svr_->cluster_->GetMyId()},
+                                    false);
+
+      auto fd = Util::SockConnect(dst_ip_, dst_port_);
+
+      if (!fd.IsOK()) {
+        return fd;
+      }
+
+      s = Util::SockSend(*fd, cmds);
+
+      if (!s.IsOK()) {
+        return s;
+      }
+      s = CheckResponseOnce(*fd);
+      if (!s.IsOK()) {
+        return s;
+      }
+      return Status::OK();
+    }
+
+    default:
+      return {Status::NotOK,
+              "File transportation is invalid" + std::to_string(svr_->GetConfig()->sst_transport_method)};
   }
-
-  cmds =
-      Redis::MultiBulkString({"sst_ingest", "local", column_family_name, file_str, svr_->cluster_->GetMyId()}, false);
-
-  auto fd = Util::SockConnect(dst_ip_, dst_port_);
-
-  if (!fd.IsOK()) {
-    return fd;
-  }
-
-  s = Util::SockSend(*fd, cmds);
-
-  if (!s.IsOK()) {
-    return s;
-  }
-  s = CheckResponseOnce(*fd);
-  if (!s.IsOK()) {
-    return s;
-  }
-
-  return Status::OK();
 }
 Status CompactAndMergeMigrate::FilterMetaSSTs(const std::vector<std::string> &input_list,
                                               std::vector<std::string> *output_list) {
@@ -313,6 +350,7 @@ Status CompactAndMergeMigrate::FilterMetaSSTs(const std::vector<std::string> &in
   rocksdb::SstFileWriter writer(rocksdb::EnvOptions(opt), opt, GetMetadataCFH());
   uint64_t valid = 0;
   auto start = Util::GetTimeStampMS();
+
   for (auto &file : input_list) {
     // Create SST reader
     auto ros = sst_file_reader.Open(file);  // rocksdb open status;
@@ -320,8 +358,24 @@ Status CompactAndMergeMigrate::FilterMetaSSTs(const std::vector<std::string> &in
       return {Status::NotOK, "failed on reading" + ros.ToString()};
     }
     auto sst_name = Util::Split(file, "/").back();
-    auto out_name = svr_->GetConfig()->migration_sync_dir + std::to_string(svr_->GetConfig()->port) + "/" + sst_name;
+
+    std::string out_name = "";
+    switch (svr_->GetConfig()->sst_transport_method) {
+      case kNetwork: {
+        out_name = file + ".bck";
+        break;
+      }
+      case kSCP: {
+        out_name =
+            svr_->GetConfig()->global_migration_sync_dir + std::to_string(svr_->GetConfig()->port) + "/" + sst_name;
+        break;
+      }
+      default:
+        return {Status::NotOK, "Unknown file transmission"};
+    }
+
     output_list->push_back(out_name);
+    LOG(INFO) << "Start filtering, target file: " << out_name;
     ros = writer.Open(out_name);
     if (!ros.ok()) {
       return {Status::NotOK, "failed on writing" + ros.ToString()};
@@ -361,9 +415,23 @@ Status CompactAndMergeMigrate::FilterSubkeySSTs(const std::vector<std::string> &
     if (!ros.ok()) {
       return {Status::NotOK, "failed on reading" + ros.ToString()};
     }
-    //    rocksdb::Env::Default()->CreateDirIfMissing(svr_->GetConfig()->migration_sync_dir);
+
     auto sst_name = Util::Split(file, "/").back();
-    auto out_name = svr_->GetConfig()->migration_sync_dir + std::to_string(svr_->GetConfig()->port) + "/" + sst_name;
+
+    std::string out_name = "";
+    switch (svr_->GetConfig()->sst_transport_method) {
+      case kNetwork: {
+        out_name = file + ".bck";
+        break;
+      }
+      case kSCP: {
+        out_name =
+            svr_->GetConfig()->global_migration_sync_dir + std::to_string(svr_->GetConfig()->port) + "/" + sst_name;
+        break;
+      }
+      default:
+        return {Status::NotOK, "Unknown file transmission"};
+    }
 
     output_list->push_back(out_name);
     ros = writer.Open(out_name);

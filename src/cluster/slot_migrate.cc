@@ -533,7 +533,7 @@ Status SlotMigrate::CheckResponseWithCounts(int sock_fd, int total) {
     // Read response data from socket buffer to the event buffer
     if (evbuffer_read(evbuf.get(), sock_fd, -1) <= 0) {
       if (errno == EAGAIN) {
-        LOG(ERROR) << "Resource temporary";
+        LOG(WARNING) << "Resource temporary unavailable, retry";
         continue;
       }
       return {Status::NotOK, fmt::format("failed to read response: {}", strerror(errno))};

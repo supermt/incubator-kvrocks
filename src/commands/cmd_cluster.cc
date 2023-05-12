@@ -148,8 +148,8 @@ class CommandIngest : public Commander {
       std::vector<std::string> ingest_files;
       std::string file_str;
       for (auto file : files) {
-        ingest_files.push_back(svr->GetConfig()->migration_sync_dir + std::to_string(svr->GetConfig()->port) + "/" +
-                               file);
+        ingest_files.push_back(svr->GetConfig()->global_migration_sync_dir + "/" +
+                               std::to_string(svr->GetConfig()->port) + "/" + file);
         file_str += ingest_files.back() + ",";
       }
       file_str.pop_back();
@@ -217,7 +217,67 @@ class CommandSSTFetch : public Commander {
     return Status::OK();
   }
 
-  Status Execute(Server *svr, Connection *conn, std::string *output) override { return Status::OK(); }
+  Status Execute(Server *svr, Connection *conn, std::string *output) override {
+    std::vector<std::string> files = Util::Split(files_str_, ",");
+
+    int repl_fd = conn->GetFD();
+    std::string ip = conn->GetAnnounceIP();
+
+    auto s = Util::SockSetBlocking(repl_fd, 1);
+    if (!s.IsOK()) {
+      return s.Prefixed("failed to set blocking mode on socket");
+    }
+
+    conn->NeedNotFreeBufferEvent();  // Feed-replica-file thread will close the replica bufferevent
+    conn->EnableFlag(Redis::Connection::kCloseAsync);
+
+    auto t =
+        GET_OR_RET(Util::CreateThread("feed-migration-file", [svr, repl_fd, ip, files, bev = conn->GetBufferEvent()]() {
+          auto exit = MakeScopeExit([bev] { bufferevent_free(bev); });
+          svr->IncrFetchFileThread();
+
+          for (const auto &file : files) {
+            if (svr->IsStopped()) break;
+
+            uint64_t file_size = 0, max_replication_bytes = 0;
+            if (svr->GetConfig()->max_replication_mb > 0) {
+              max_replication_bytes = (svr->GetConfig()->max_replication_mb * MiB) / svr->GetFetchFileThreadNum();
+            }
+            auto start = std::chrono::high_resolution_clock::now();
+            auto fd = UniqueFD(svr->cluster_->OpenDataFileForMigrate(file, &file_size));
+            if (!fd) break;
+
+            // Send file size and content
+            if (Util::SockSend(repl_fd, std::to_string(file_size) + CRLF).IsOK() &&
+                Util::SockSendFile(repl_fd, *fd, file_size).IsOK()) {
+              LOG(INFO) << "[cluster ingestion] Succeed sending file " << file << " to " << ip;
+            } else {
+              LOG(ERROR) << "[cluster ingestion] Failed to send file " << file << " to " << ip
+                         << ", error: " << strerror(errno);
+              break;
+            }
+            fd.Close();
+
+            auto end = std::chrono::high_resolution_clock::now();
+            uint64_t duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+            auto shortest = static_cast<uint64_t>(static_cast<double>(file_size) /
+                                                  static_cast<double>(max_replication_bytes) * (1000 * 1000));
+            if (max_replication_bytes > 0 && duration < shortest) {
+              LOG(INFO) << "[cluster ingestion] Need to sleep " << (shortest - duration) / 1000
+                        << " ms since of sending files too quickly";
+              usleep(shortest - duration);
+            }
+          }
+          auto now = static_cast<time_t>(Util::GetTimeStamp());
+          svr->storage_->SetCheckpointAccessTime(now);
+          svr->DecrFetchFileThread();
+        }));
+
+    if (auto s = Util::ThreadDetach(t); !s) {
+      return s;
+    }
+    return Status::OK();
+  }
 
  private:
   std::string files_str_;
