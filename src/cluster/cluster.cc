@@ -812,7 +812,8 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
       nodes_.find(myself_->master_id_) != nodes_.end() && nodes_[myself_->master_id_] == slots_nodes_[slot]) {
     return Status::OK();  // My master is serving this slot
   }
-  LOG(INFO) << "Trying to find slot: " << slot << ", Forbidden slot is: " << svr_->slot_migrate_->GetForbiddenSlot();
+  //  LOG(INFO) << "Trying to find slot: " << slot << ", Forbidden slot is: " <<
+  //  svr_->slot_migrate_->GetForbiddenSlot();
   return {Status::RedisExecErr,
           fmt::format("MOVED {} {}:{}", slot, slots_nodes_[slot]->host_, slots_nodes_[slot]->port_)};
 }

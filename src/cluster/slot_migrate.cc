@@ -1068,15 +1068,15 @@ Status SlotMigrate::SyncWalBeforeForbidSlot() {
 
 Status SlotMigrate::SyncWalAfterForbidSlot() {
   // Block server to set forbidden slot
-  uint64_t during = Util::GetTimeStampUS();
+  uint64_t during = Util::GetTimeStampMS();
   {
     auto exclusivity = svr_->WorkExclusivityGuard();
     SetForbiddenSlot(migrate_slot_);
   }
 
   wal_increment_seq_ = storage_->GetDB()->GetLatestSequenceNumber();
-  during = Util::GetTimeStampUS() - during;
-  LOG(INFO) << "[migrate] To set forbidden slot, server was blocked for " << during << "us";
+  during = Util::GetTimeStampMS() - during;
+  LOG(INFO) << "[migrate] To set forbidden slot, server was blocked for " << during << "ms";
 
   // No incremental data
   if (wal_increment_seq_ <= wal_begin_seq_) return Status::OK();
