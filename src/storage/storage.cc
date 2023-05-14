@@ -124,7 +124,7 @@ rocksdb::Options Storage::InitRocksDBOptions() {
   // See: https://github.com/facebook/rocksdb/wiki/Statistics
 
   options.statistics = rocksdb::CreateDBStatistics();
-  options.statistics->set_stats_level(static_cast<rocksdb::StatsLevel>(rocksdb::kExceptDetailedTimers));
+  //  options.statistics->set_stats_level(static_cast<rocksdb::StatsLevel>(rocksdb::kExceptDetailedTimers));
   options.stats_dump_period_sec = config_->RocksDB.stats_dump_period_sec;
   options.max_open_files = config_->RocksDB.max_open_files;
   options.compaction_style = rocksdb::CompactionStyle::kCompactionStyleLevel;

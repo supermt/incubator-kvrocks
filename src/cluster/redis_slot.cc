@@ -24,7 +24,10 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <iostream>
 #include <string>
+
+#include "parse_util.h"
 
 static const uint16_t crc16tab[256] = {
     0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7, 0x8108, 0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad,
@@ -61,6 +64,13 @@ uint16_t GetSlotNumFromKey(const std::string &key) {
   }
 
   auto crc = crc16(tag.data(), static_cast<int>(tag.size()));
+  auto plain_key = key.substr(1, key.size() - 2);
+  auto tag_no = ParseInt<int64_t>(plain_key, 10);
+  std::cout << tag_no.IsOK() << std::endl;
+  if (tag_no.IsOK()) {
+    return *tag_no % HASH_SLOTS_SIZE;
+  }
+
   return static_cast<int>(crc & HASH_SLOTS_MASK);
 }
 
