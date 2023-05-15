@@ -101,6 +101,8 @@ class Cluster {
   bool IsWriteForbiddenSlot(int slot);
   Status CanExecByMySelf(const Redis::CommandAttributes *attributes, const std::vector<std::string> &cmd_tokens,
                          Redis::Connection *conn);
+  void SetSlotAccessed(int slot);
+  std::string GetServerHotness();
   Status SetMasterSlaveRepl();
   Status ValidateMigrateSlot(int slot, const std::string &dst_node_id);
   Status MigrateSlot(int slot, const std::string &dst_node_id);

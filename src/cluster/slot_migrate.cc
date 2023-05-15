@@ -400,15 +400,16 @@ Status SlotMigrate::Success() {
     for (auto slot : migrate_slots_) {
       //      std::cout << "Is batched? " << IsBatched() << " slot size: " << migrate_slots_.size();
       s = svr_->cluster_->SetSlotMigrated(slot, dst_ip_port);
+      svr_->slot_hotness_map_[slot] = 0;
       if (!s.IsOK()) return s.Prefixed(fmt::format("failed to set slot {} as migrated to {}", slot, dst_ip_port));
     }
   } else {
     s = svr_->cluster_->SetSlotMigrated(migrate_slot_, dst_ip_port);
+    svr_->slot_hotness_map_[migrate_slot_] = 0;
   }
   if (!s.IsOK()) {
     return s.Prefixed(fmt::format("failed to set slot {} as migrated to {}", migrate_slot_, dst_ip_port));
   }
-
   migrate_slots_.clear();
   migrate_failed_slot_ = -1;
 

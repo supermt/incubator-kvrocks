@@ -1771,8 +1771,23 @@ Status Server::ChooseMigrationMethod() {
     if (!s.IsOK()) {
       return s.Prefixed("failed to create migration thread");
     }
+    for (int i = 0; i < HASH_SLOTS_SIZE; i++) {
+      slot_hotness_map_.emplace(i, 0);
+    }
   }
   return Status::OK();
+}
+std::string Server::GetHotnessJson() {
+  std::string output;
+  output.reserve(8 * 16384);
+  output.append("{");
+  for (auto [key, value] : slot_hotness_map_) {
+    if (value != 0) output.append(fmt::format(R"({}:{},)", key, value));
+  }
+  if (output.size() > 1) output.pop_back();
+  output.append("}");
+  output.shrink_to_fit();
+  return output;
 }
 // Status Server::PerformMigrationOnce(Server *svr) {
 //   std::unique_ptr<SlotMigrate> migrate = std::make_unique<SlotMigrate>(

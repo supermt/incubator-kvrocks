@@ -788,7 +788,7 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
     if (attributes->is_write() && IsWriteForbiddenSlot(slot)) {
       return {Status::RedisExecErr, "TRYAGAIN Can't write to slot being migrated which is in write forbidden phase"};
     }
-
+    SetSlotAccessed(slot);
     return Status::OK();  // I'm serving this slot
   }
 
@@ -798,6 +798,7 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
     // although the slot is not belong to itself. Therefore, we record the importing slot
     // and mark the importing connection to accept the importing data.
     //    LOG(INFO) << "This connection is serving Import";
+    SetSlotAccessed(slot);
     return Status::OK();  // I'm serving the importing connection
   }
 
@@ -805,6 +806,7 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
     // After the slot is migrated, new requests of the migrated slot will be moved to
     // the destination server. Before the central controller change the topology, the destination
     // server should record the imported slots to accept new data of the imported slots.
+    SetSlotAccessed(slot);
     return Status::OK();  // I'm serving the imported slot
   }
 
@@ -1060,3 +1062,5 @@ Status Cluster::fetchFile(int sock_fd, evbuffer *evbuf, const std::string &dir, 
   if (!s.IsOK()) return {Status::NotOK, "Mv Tmp error"};
   return Status::OK();
 }
+void Cluster::SetSlotAccessed(int slot) { svr_->slot_hotness_map_[slot]++; }
+std::string Cluster::GetServerHotness() { return svr_->GetHotnessJson(); }

@@ -230,6 +230,7 @@ class Server {
   //  std::unique_ptr<ThreadPool> migration_pool_;
   std::map<int, std::unique_ptr<SlotImport>> slot_import_map;
   std::map<int, std::unique_ptr<SlotMigrate>> migration_pool_;
+  std::map<int16_t, uint64_t> slot_hotness_map_;
 
   void UpdateWatchedKeysFromArgs(const std::vector<std::string> &args, const Redis::CommandAttributes &attr);
   void UpdateWatchedKeysManually(const std::vector<std::string> &keys);
@@ -241,6 +242,8 @@ class Server {
 #ifdef ENABLE_OPENSSL
   UniqueSSLContext ssl_ctx_;
 #endif
+
+  std::string GetHotnessJson();
 
  private:
   void cron();
