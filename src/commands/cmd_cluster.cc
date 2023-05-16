@@ -294,7 +294,16 @@ class CommandClusterX : public Commander {
 
     if (subcommand_ == "migrate") {
       if (args.size() == 4) {
-        slot_ = GET_OR_RET(ParseInt<int64_t>(args[2], 10));
+        auto slot_list = Util::Split(args[2], ",");
+        if (slot_list.size() > 0) {
+          slot_ = -1;
+          for (auto slot : slot_list) {
+            int temp = GET_OR_RET(ParseInt<int64_t>(slot, 10));
+            slots_.push_back(temp);
+          }
+        } else {
+          slot_ = GET_OR_RET(ParseInt<int64_t>(args[2], 10));
+        }
         dst_node_id_ = args[3];
         return Status::OK();
       } else if (args.size() == 5) {

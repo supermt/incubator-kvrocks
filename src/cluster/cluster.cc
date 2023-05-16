@@ -824,12 +824,17 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
   Status s;
   auto dst = nodes_[dst_node_id];
   std::vector<std::future<Status>> results;
-  for (int slot : slots) {
-    s = ValidateMigrateSlot(slot, dst_node_id);
+  for (auto it = slots.begin(); it != slots.end(); ++it) {
+    s = ValidateMigrateSlot(*it, dst_node_id);
     if (!s.IsOK()) {
-      return s;
+      LOG(WARNING) << "Slot " << *it << " is not valid for migration";
+      slots.erase(it);
     }
   }
+  if (slots.empty()) {
+    return {Status::NotOK, "All slots are not valid"};
+  }
+
   switch (svr_->GetConfig()->migrate_method) {
     case kSeekAndInsert: {
       return {Status::NotOK, "This migration method does not support multi-slot migration"};
