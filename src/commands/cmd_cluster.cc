@@ -294,15 +294,20 @@ class CommandClusterX : public Commander {
 
     if (subcommand_ == "migrate") {
       if (args.size() == 4) {
-        auto slot_list = Util::Split(args[2], ",");
+        std::string slot_str = args[2];
+        if (slot_str.back() == ',') slot_str.pop_back();
+        auto slot_list = Util::Split(slot_str, ",");
+        std::cout << slot_list.size() << std::endl;
         if (slot_list.size() > 1) {
           slot_ = -1;
           for (auto slot : slot_list) {
+            std::cout << slot << std::endl;
             int temp = GET_OR_RET(ParseInt<int64_t>(slot, 10));
             slots_.push_back(temp);
           }
         } else {
-          slot_ = GET_OR_RET(ParseInt<int64_t>(args[2], 10));
+          slot_ = GET_OR_RET(ParseInt<int64_t>(slot_str, 10));
+          slots_.push_back(slot_);
         }
         dst_node_id_ = args[3];
         return Status::OK();
@@ -311,7 +316,7 @@ class CommandClusterX : public Commander {
         int64_t start = GET_OR_RET(ParseInt<int64_t>(args[2], 10));
         int64_t end = GET_OR_RET(ParseInt<int64_t>(args[3], 10));
         for (int64_t i = start; i < end; i++) {
-          slots_.push_back(static_cast<int>(i));
+          slots_.push_back(i);
         }
         dst_node_id_ = args[4];
         return Status::OK();
@@ -419,11 +424,10 @@ class CommandClusterX : public Commander {
       *output = Redis::BulkString(std::to_string(v));
     } else if (subcommand_ == "migrate") {
       Status s;
-      if (slot_ == -1) {
-        s = svr->cluster_->MigrateSlots(slots_, dst_node_id_);
-
-      } else {
+      if (svr->GetConfig()->migrate_method < kSeekAndInsertBatched) {
         s = svr->cluster_->MigrateSlot(static_cast<int>(slot_), dst_node_id_);
+      } else {
+        s = svr->cluster_->MigrateSlots(slots_, dst_node_id_);
       }
 
       if (s.IsOK()) {
