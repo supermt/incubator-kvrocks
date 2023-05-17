@@ -295,7 +295,7 @@ class CommandClusterX : public Commander {
     if (subcommand_ == "migrate") {
       if (args.size() == 4) {
         auto slot_list = Util::Split(args[2], ",");
-        if (slot_list.size() > 0) {
+        if (slot_list.size() > 1) {
           slot_ = -1;
           for (auto slot : slot_list) {
             int temp = GET_OR_RET(ParseInt<int64_t>(slot, 10));
