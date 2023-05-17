@@ -66,7 +66,7 @@ uint16_t GetSlotNumFromKey(const std::string &key) {
   auto crc = crc16(tag.data(), static_cast<int>(tag.size()));
   auto plain_key = key.substr(1, key.size() - 2);
   auto tag_no = ParseInt<int64_t>(plain_key, 10);
-  std::cout << tag_no.IsOK() << std::endl;
+  //  std::cout << tag_no.IsOK() << std::endl;
   if (tag_no.IsOK()) {
     return *tag_no % HASH_SLOTS_SIZE;
   }
