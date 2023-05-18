@@ -26,7 +26,7 @@
 
 #include "status.h"
 
-namespace Kvrocks2redis {
+namespace MigrationAgent {
 
 struct redis_server {
   std::string host;
@@ -36,23 +36,23 @@ struct redis_server {
 };
 
 struct Config {
+  std::string ToString();
+
  public:
   int loglevel = 0;
   bool daemonize = false;
 
-  std::string work_dir = "./data";
-  std::string output_dir = "./";
-  std::string db_dir = work_dir + "/db";
-  std::string pidfile = output_dir + "/kvrocks2redis2.pid";
-  std::string aof_file_name = "appendonly.aof";
-  std::string next_offset_file_name = "last_next_offset.txt";
-  std::string next_seq_file_path = output_dir + "/last_next_seq.txt";
+  std::string work_dir = "";
+  std::string pidfile = "";
+  std::string src_db_dir = "";
+  std::string dst_db_dir = "";
+  std::string uri_prefix = "";
 
-  std::string kvrocks_auth;
-  std::string kvrocks_host;
-  int kvrocks_port = 0;
-  std::map<std::string, redis_server> tokens;
-  bool cluster_enable = false;
+  std::string src_server_host = "0.0.0.0";
+  int src_server_port = 40001;
+  std::string dst_server_host = "0.0.0.0";
+  int dst_server_port = 40002;
+  std::vector<int> slot_list;
 
  public:
   Status Load(std::string path);
@@ -65,4 +65,4 @@ struct Config {
   Status parseConfigFromString(const std::string &input);
 };
 
-}  // namespace Kvrocks2redis
+}  // namespace MigrationAgent

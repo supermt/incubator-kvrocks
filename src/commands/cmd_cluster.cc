@@ -169,7 +169,10 @@ class CommandIngest : public Commander {
 
       //      auto t = GET_OR_RET(svr->cluster_->IngestFiles(column_family_name_, ingest_files));
 
-      //      auto s = svr->cluster_->IngestFiles(column_family_name_, ingest_files);
+      auto s = svr->cluster_->IngestFiles(column_family_name_, ingest_files);
+      if (!s.IsOK()) {
+        return s;
+      }
 
       *output = Redis::SimpleString("OK");
       return Status::OK();

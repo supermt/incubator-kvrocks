@@ -29,11 +29,12 @@
 #include <utility>
 #include <vector>
 
+#include "../kvrocks2redis/config.h"
 #include "config/config.h"
 #include "config/config_util.h"
 #include "string_util.h"
 
-namespace Kvrocks2redis {
+namespace MigrationAgent {
 
 static constexpr const char *kLogLevels[] = {"info", "warning", "error", "fatal"};
 static constexpr size_t kNumLogLevel = std::size(kLogLevels);
@@ -66,50 +67,39 @@ Status Config::parseConfigFromString(const std::string &input) {
     if (work_dir.back() != '/') {
       work_dir += "/";
     }
-    db_dir = work_dir + "db";
-  } else if (size == 1 && key == "output-dir") {
-    output_dir = args[0];
-    if (output_dir.empty()) {
+    pidfile = work_dir + "kvrocks2redis.pid";
+  } else if (size == 1 && key == "src_db_dir") {
+    src_db_dir = args[0];
+    if (src_db_dir.empty()) {
       return {Status::NotOK, "'output-dir' was not specified"};
     }
 
-    if (output_dir.back() != '/') {
-      output_dir += "/";
+    if (src_db_dir.back() != '/') {
+      src_db_dir += "/";
     }
-    pidfile = output_dir + "kvrocks2redis.pid";
-    next_seq_file_path = output_dir + "last_next_seq.txt";
-  } else if (size == 1 && key == "log-level") {
-    for (size_t i = 0; i < kNumLogLevel; i++) {
-      if (Util::ToLower(args[0]) == kLogLevels[i]) {
-        loglevel = static_cast<int>(i);
-        break;
-      }
-    }
-  } else if (size == 1 && key == "pidfile") {
-    pidfile = args[0];
-  } else if (size >= 2 && key == "kvrocks") {
-    kvrocks_host = args[0];
-    // In new versions, we don't use extra port to implement replication
-    kvrocks_port = GET_OR_RET(ParseInt<std::uint16_t>(args[1]).Prefixed("kvrocks port number"));
-
-    if (size == 3) {
-      kvrocks_auth = args[2];
-    }
-  } else if (size == 1 && key == "cluster-enable") {
-    cluster_enable = GET_OR_RET(yesnotoi(args[0]).Prefixed("key 'cluster-enable'"));
-  } else if (size >= 2 && strncasecmp(key.data(), "namespace.", 10) == 0) {
-    std::string ns = original_key.substr(10);
-    if (ns.size() > INT8_MAX) {
-      return {Status::NotOK, fmt::format("namespace size exceed limit {}", INT8_MAX)};
+  } else if (size == 1 && key == "dst_db_dir") {
+    dst_db_dir = args[0];
+    if (dst_db_dir.empty()) {
+      return {Status::NotOK, "'output-dir' was not specified"};
     }
 
-    tokens[ns].host = args[0];
-    tokens[ns].port = GET_OR_RET(ParseInt<std::uint16_t>(args[1]).Prefixed("kvrocks port number"));
-
-    if (size >= 3) {
-      tokens[ns].auth = args[2];
+    if (dst_db_dir.back() != '/') {
+      dst_db_dir += "/";
     }
-    tokens[ns].db_number = size == 4 ? std::atoi(args[3].c_str()) : 0;
+  } else if (size == 1 && key == "uri_prefix ") {
+    uri_prefix = args[0];
+  } else if (size == 2 && key == "src_server") {
+    src_server_host = args[0];
+    src_server_port = GET_OR_RET(ParseInt<std::uint16_t>(args[1]).Prefixed("src_server port number"));
+    if (src_server_host.empty()) {
+      return {Status::NotOK, "'src_server_host' was not specified"};
+    }
+  } else if (size == 2 && key == "dst_server") {
+    dst_server_host = args[0];
+    dst_server_port = GET_OR_RET(ParseInt<std::uint16_t>(args[1]).Prefixed("dst_server port number"));
+    if (src_server_host.empty()) {
+      return {Status::NotOK, "'dst_server_host' was not specified"};
+    }
   } else {
     return {Status::NotOK, "unknown configuration directive or wrong number of arguments"};
   }
@@ -144,16 +134,23 @@ Status Config::Load(std::string path) {
     return {Status::NotOK, s.ToString()};
   }
 
-  s = rocksdb::Env::Default()->FileExists(output_dir);
+  s = rocksdb::Env::Default()->FileExists(work_dir);
   if (!s.ok()) {
     if (s.IsNotFound()) {
       return {Status::NotOK,
-              fmt::format("the specified directory '{}' for intermediate files doesn't exist", output_dir)};
+              fmt::format("the specified directory '{}' for intermediate files doesn't exist", work_dir)};
     }
     return {Status::NotOK, s.ToString()};
   }
 
   return Status::OK();
 }
+std::string Config::ToString() {
+  std::string temp;
+  temp += fmt::format("{}:{}, dir:{},", src_server_host, src_server_port, uri_prefix + src_db_dir);
+  temp += fmt::format("{}:{}, dir:{}", dst_server_host, dst_server_port, uri_prefix + dst_db_dir);
 
-}  // namespace Kvrocks2redis
+  return temp;
+}
+
+}  // namespace MigrationAgent
