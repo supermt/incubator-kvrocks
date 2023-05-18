@@ -51,7 +51,7 @@ FetchContent_MakeAvailableWithArgs(rocksdb
         WITH_ZLIB=ON
         WITH_ZSTD=ON
         WITH_TOOLS=OFF
-        WITH_GFLAGS=OFF
+        WITH_GFLAGS=ON
         WITH_TBB=ON
         USE_RTTI=ON
         ROCKSDB_BUILD_SHARED=OFF

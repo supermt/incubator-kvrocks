@@ -21,6 +21,7 @@
 #include <event2/thread.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <sys/stat.h>
 
@@ -34,6 +35,11 @@
 #include "version.h"
 
 const char *kDefaultConfPath = "./migration_agent.conf";
+
+DEFINE_string(prefix, "./", "root_directory  or hdfs://");
+DEFINE_string(src_info, "127.0.0.1:40001@node1/asdf/", "root_directory  or hdfs://");
+DEFINE_string(dst_info, "127.0.0.1:40002@node2/asdf/", "root_directory  or hdfs://");
+DEFINE_string(slot_str, "", "the slot number id list, like: 1,2,3,4");
 
 std::function<void()> hup_handler;
 
@@ -58,62 +64,12 @@ static void usage(const char *program) {
   exit(0);
 }
 
-static Options parseCommandLineOptions(int argc, char **argv) {
-  int ch = 0;
-  Options opts;
-  while ((ch = ::getopt(argc, argv, "c:h")) != -1) {
-    switch (ch) {
-      case 's': {
-        opts.src_info = optarg;
-        break;
-      }
-      case 'd': {
-        opts.dst_info = optarg;
-        break;
-      }
-      case 'p': {
-        opts.prefix = optarg;
-        break;
-      }
-      case 'l': {
-        opts.slot_str = optarg;
-        break;
-      }
-      case 'h': {
-        opts.show_usage = true;
-        break;
-      }
-      default:
-        usage(argv[0]);
-    }
-  }
-  return opts;
-}
-
 static void initGoogleLog(const MigrationAgent::Config *config) {
   FLAGS_minloglevel = config->loglevel;
   FLAGS_max_log_size = 100;
   FLAGS_logbufsecs = 0;
   FLAGS_log_dir = config->work_dir;
 }
-
-static Status createPidFile(const std::string &path) {
-  int fd = open(path.data(), O_RDWR | O_CREAT | O_EXCL, 0660);
-  if (fd < 0) {
-    return {Status::NotOK, strerror(errno)};
-  }
-
-  std::string pid_str = std::to_string(getpid());
-  auto s = Util::Write(fd, pid_str);
-  if (!s.IsOK()) {
-    return s.Prefixed("failed to write to PID-file");
-  }
-
-  close(fd);
-  return Status::OK();
-}
-
-static void removePidFile(const std::string &path) { std::remove(path.data()); }
 
 Server *GetServer() { return nullptr; }
 
@@ -126,11 +82,9 @@ int main(int argc, char *argv[]) {
   signal(SIGTERM, signal_handler);
 
   std::cout << "Version: " << VERSION << " @" << GIT_COMMIT << std::endl;
-  auto opts = parseCommandLineOptions(argc, argv);
-  if (opts.show_usage) usage(argv[0]);
-
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   MigrationAgent::Config agent_config;
-  auto temp = Util::Split(opts.src_info, "@");
+  auto temp = Util::Split(FLAGS_src_info, "@");
   auto host_and_ip = Util::Split(temp[0], ":");
   agent_config.src_server_host = host_and_ip[0];
   {
@@ -141,7 +95,7 @@ int main(int argc, char *argv[]) {
 
   agent_config.src_db_dir = temp[1];
 
-  temp = Util::Split(opts.dst_info, "@");
+  temp = Util::Split(FLAGS_dst_info, "@");
   host_and_ip = Util::Split(temp[0], ":");
   agent_config.src_server_host = host_and_ip[0];
   {
@@ -152,9 +106,9 @@ int main(int argc, char *argv[]) {
 
   agent_config.src_db_dir = temp[1];
 
-  agent_config.uri_prefix = opts.prefix;
+  agent_config.uri_prefix = FLAGS_prefix;
   //      ET_OR_RET(ParseInt<std::uint16_t>(host_and_ip[1]));
-  temp = Util::Split(opts.slot_str, ",");
+  temp = Util::Split(FLAGS_slot_str, ",");
   for (const auto &slot : temp) {
     if (!slot.empty()) agent_config.slot_list.push_back(std::stoi(slot));
   }
