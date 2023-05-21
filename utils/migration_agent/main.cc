@@ -40,6 +40,7 @@ DEFINE_string(prefix, "./", "root_directory  or hdfs://");
 DEFINE_string(src_info, "127.0.0.1:40001@node1/asdf/", "root_directory  or hdfs://");
 DEFINE_string(dst_info, "127.0.0.1:40002@node2/asdf/", "root_directory  or hdfs://");
 DEFINE_string(slot_str, "", "the slot number id list, like: 1,2,3,4");
+DEFINE_int64(pull_method, 0, "How to do the pull-based method, 0 for compact-and-merge, 1 for seek-and-ingest");
 
 std::function<void()> hup_handler;
 
@@ -116,6 +117,21 @@ int main(int argc, char *argv[]) {
 
   initGoogleLog(&agent_config);
 
+  if (agent_config.uri_prefix.back() != '/') agent_config.uri_prefix += '/';
+  if (agent_config.src_db_dir.back() != '/') agent_config.src_db_dir += '/';
+  if (agent_config.dst_db_dir.back() != '/') agent_config.dst_db_dir += '/';
+
+  Config src_config;
+  src_config.db_dir = agent_config.uri_prefix + agent_config.src_db_dir;
+  src_config.slot_id_encoded = true;
+  Engine::Storage src_sst_store(&src_config);
+  auto s = src_sst_store.Open(true);
+  if (!s.IsOK()) {
+    LOG(ERROR) << "Failed to open Kvrocks storage: " << s.Msg();
+    exit(-1);
+  }
+  Parser sst_reader(&src_sst_store);
+  sst_reader.ParseFullDB();
   //  // KVrocks Config
   //  Config kvrocks_config;
   //  kvrocks_config.db_dir = config.db_dir;
