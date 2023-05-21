@@ -144,6 +144,7 @@ class SlotMigrate : public Redis::Database {
   virtual Status SendSnapshot();
   Status SyncWal();
   Status Success();
+  Status UpdateTopo(int slot,std::string dst_server);
   Status Fail();
   virtual void Clean();
 

@@ -438,7 +438,7 @@ void SlotMigrate::Clean() {
     slot_id_info =
         "range:[" + std::to_string(slot_job_->slots_.front()) + "," + std::to_string(slot_job_->slots_.back()) + "]";
   }
-
+  
   LOG(INFO) << "[" << GetName() << "] Clean resources of migrating slot " << slot_id_info;
   if (slot_snapshot_) {
     storage_->GetDB()->ReleaseSnapshot(slot_snapshot_);
@@ -530,10 +530,12 @@ Status SlotMigrate::CheckResponseWithCounts(int sock_fd, int total) {
   int cnt = 0;
   parser_state_ = ParserState::ArrayLen;
   UniqueEvbuf evbuf;
+  int retry = 0;
   while (true) {
     // Read response data from socket buffer to the event buffer
     if (evbuffer_read(evbuf.get(), sock_fd, -1) <= 0) {
-      if (errno == EAGAIN) {
+      if (errno == EAGAIN && retry < 10) {
+        retry++;
         LOG(WARNING) << "Resource temporary unavailable, retry";
         continue;
       }
@@ -1182,6 +1184,40 @@ Status SlotMigrate::SendAuth(int target_fd) {
     }
     return s;
   };
+}
+Status SlotMigrate::UpdateTopo(int slot, std::string dst_server) {  // Publish slot info to the cluster
+
+  std::map<std::string, std::string> server_links;
+
+  for (auto item : svr_->cluster_->nodes_) {
+    auto name = item.first;
+    auto ip = item.second->host_;
+    auto port = item.second->port_;
+    server_links.emplace(name, "redis-cli -h " + ip + " -p " + std::to_string(port) + " ");
+  }
+
+  std::string cmd;
+
+  int version = svr_->cluster_->GetVersion();
+  version += 1;
+  for (const auto &item : server_links) {
+    auto server_name = item.first;
+    auto cmd_head = item.second;
+    // CLUSTERX SETSLOT $SLOT_ID NODE $NODE_ID $VERSION
+    std::string set_slot_cmd =
+        "CLUSTERX SETSLOT " + std::to_string(slot) + " NODE " + dst_server + " " + std::to_string(version);
+    cmd = cmd_head + set_slot_cmd;
+    LOG(INFO) << "Setting slot(s), command: " << cmd;
+    FILE *pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return {Status::NotOK, "Execution failed"};
+    char buffer[128];
+    while (fgets(buffer, 128, pipe)) {
+      LOG(INFO) << "slot setting results" << buffer;
+    }
+    pclose(pipe);
+  }
+
+  return Status::OK();
 }
 
 Ingestion::Ingestion(Server *svr, std::vector<std::string> &candidates) {}

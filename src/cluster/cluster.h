@@ -115,7 +115,7 @@ class Cluster {
 
   static bool SubCommandIsExecExclusive(const std::string &subcommand);
 
- private:
+  // private:
   std::string GenNodesDescription();
   std::string GenNodesInfo();
   void UpdateSlotsInfo();
