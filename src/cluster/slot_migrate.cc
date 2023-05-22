@@ -438,7 +438,7 @@ void SlotMigrate::Clean() {
     slot_id_info =
         "range:[" + std::to_string(slot_job_->slots_.front()) + "," + std::to_string(slot_job_->slots_.back()) + "]";
   }
-  
+
   LOG(INFO) << "[" << GetName() << "] Clean resources of migrating slot " << slot_id_info;
   if (slot_snapshot_) {
     storage_->GetDB()->ReleaseSnapshot(slot_snapshot_);

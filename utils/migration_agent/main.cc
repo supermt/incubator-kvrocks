@@ -36,11 +36,15 @@
 
 const char *kDefaultConfPath = "./migration_agent.conf";
 
-DEFINE_string(prefix, "./", "root_directory  or hdfs://");
-DEFINE_string(src_info, "127.0.0.1:40001@node1/asdf/", "root_directory  or hdfs://");
-DEFINE_string(dst_info, "127.0.0.1:40002@node2/asdf/", "root_directory  or hdfs://");
-DEFINE_string(slot_str, "", "the slot number id list, like: 1,2,3,4");
+DEFINE_string(work_dir, "/tmp/migration_sync/", "root_directory  or hdfs://");
+DEFINE_string(src_uri, "./", "root_directory  or hdfs://");
+DEFINE_string(dst_uri, "./", "root_directory  or hdfs://");
+DEFINE_string(src_info, "127.0.0.1:40001@node_40001/db/", "");
+DEFINE_string(dst_info, "127.0.0.1:40002@node_40002/db/", "");
+DEFINE_string(slot_str, "0,1,2,3,4,5,6,7,8,9,10,", "the slot number id list, like: 1,2,3,4");
 DEFINE_int64(pull_method, 0, "How to do the pull-based method, 0 for compact-and-merge, 1 for seek-and-ingest");
+DEFINE_string(namespace_str, "", "The namespace of remote server");
+DEFINE_string(migration_user, "jinghua2", "The user name of remote server");
 
 std::function<void()> hup_handler;
 
@@ -87,6 +91,7 @@ int main(int argc, char *argv[]) {
   MigrationAgent::Config agent_config;
   auto temp = Util::Split(FLAGS_src_info, "@");
   auto host_and_ip = Util::Split(temp[0], ":");
+  agent_config.remote_username = FLAGS_migration_user;
   agent_config.src_server_host = host_and_ip[0];
   {
     auto temp_s = ParseInt<std::uint16_t>(host_and_ip[1]);
@@ -94,7 +99,7 @@ int main(int argc, char *argv[]) {
     agent_config.src_server_port = *temp_s;
   }
 
-  agent_config.src_db_dir = temp[1];
+  agent_config.src_db_dir = FLAGS_src_uri + temp[1];
 
   temp = Util::Split(FLAGS_dst_info, "@");
   host_and_ip = Util::Split(temp[0], ":");
@@ -105,9 +110,9 @@ int main(int argc, char *argv[]) {
     agent_config.src_server_port = *temp_s;
   }
 
-  agent_config.src_db_dir = temp[1];
+  agent_config.dst_db_dir = FLAGS_dst_uri + temp[1];
 
-  agent_config.uri_prefix = FLAGS_prefix;
+  agent_config.work_dir = FLAGS_work_dir;
   //      ET_OR_RET(ParseInt<std::uint16_t>(host_and_ip[1]));
   temp = Util::Split(FLAGS_slot_str, ",");
   for (const auto &slot : temp) {
@@ -117,46 +122,33 @@ int main(int argc, char *argv[]) {
 
   initGoogleLog(&agent_config);
 
-  if (agent_config.uri_prefix.back() != '/') agent_config.uri_prefix += '/';
   if (agent_config.src_db_dir.back() != '/') agent_config.src_db_dir += '/';
   if (agent_config.dst_db_dir.back() != '/') agent_config.dst_db_dir += '/';
 
   Config src_config;
-  src_config.db_dir = agent_config.uri_prefix + agent_config.src_db_dir;
+  src_config.db_dir = agent_config.src_db_dir;
   src_config.slot_id_encoded = true;
   Engine::Storage src_sst_store(&src_config);
-  auto s = src_sst_store.Open(true);
+
+  auto s = src_sst_store.Open(FLAGS_pull_method == 1);
   if (!s.IsOK()) {
     LOG(ERROR) << "Failed to open Kvrocks storage: " << s.Msg();
     exit(-1);
   }
-  Parser sst_reader(&src_sst_store);
-  sst_reader.ParseFullDB();
-  //  // KVrocks Config
-  //  Config kvrocks_config;
-  //  kvrocks_config.db_dir = config.db_dir;
-  //  kvrocks_config.cluster_enabled = config.cluster_enable;
-  //  kvrocks_config.slot_id_encoded = config.cluster_enable;
-  //
-  //  Engine::Storage storage(&kvrocks_config);
-  //  auto s = storage.Open(true);
-  //  if (!s.IsOK()) {
-  //    LOG(ERROR) << "Failed to open Kvrocks storage: " << s.Msg();
-  //    exit(1);
+  Parser sst_reader(&src_sst_store, agent_config.slot_list, agent_config.work_dir, FLAGS_namespace_str, agent_config);
+  //  std::vector<std::string> slot_prefix_list;
+  //  for (auto slot_prefix : slot_prefix_list) {
   //  }
-  //
-  //  RedisWriter writer(&config);
-  //  Parser parser(&storage, &writer);
-  //
-  //  Sync sync(&storage, &writer, &parser, &config);
-  //  hup_handler = [&sync]() {
-  //    if (!sync.IsStopped()) {
-  //      LOG(INFO) << "Bye Bye";
-  //      sync.Stop();
-  //    }
-  //  };
-  //  sync.Start();
-  //
-  //  removePidFile(config.pidfile);
+  if (FLAGS_pull_method == 0) {
+    s = sst_reader.CompactAndMerge();
+  } else {
+    s = sst_reader.SeekAndDump();
+  }
+
+  if (!s.IsOK()) {
+    std::cout << "Seek and Dump error!";
+    return -1;
+  }
+
   return 0;
 }

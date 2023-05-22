@@ -86,8 +86,6 @@ Status Config::parseConfigFromString(const std::string &input) {
     if (dst_db_dir.back() != '/') {
       dst_db_dir += "/";
     }
-  } else if (size == 1 && key == "uri_prefix ") {
-    uri_prefix = args[0];
   } else if (size == 2 && key == "src_server") {
     src_server_host = args[0];
     src_server_port = GET_OR_RET(ParseInt<std::uint16_t>(args[1]).Prefixed("src_server port number"));
@@ -147,8 +145,8 @@ Status Config::Load(std::string path) {
 }
 std::string Config::ToString() {
   std::string temp;
-  temp += fmt::format("{}:{}, dir:{},", src_server_host, src_server_port, uri_prefix + src_db_dir);
-  temp += fmt::format("{}:{}, dir:{}", dst_server_host, dst_server_port, uri_prefix + dst_db_dir);
+  temp += fmt::format("{}:{}, dir:{},", src_server_host, src_server_port, src_db_dir);
+  temp += fmt::format("{}:{}, dir:{}", dst_server_host, dst_server_port, dst_db_dir);
 
   return temp;
 }

@@ -46,13 +46,13 @@ struct Config {
   std::string pidfile = "";
   std::string src_db_dir = "";
   std::string dst_db_dir = "";
-  std::string uri_prefix = "";
 
   std::string src_server_host = "0.0.0.0";
   int src_server_port = 40001;
   std::string dst_server_host = "0.0.0.0";
   int dst_server_port = 40002;
   std::vector<int> slot_list;
+  std::string remote_username;
 
  public:
   Status Load(std::string path);

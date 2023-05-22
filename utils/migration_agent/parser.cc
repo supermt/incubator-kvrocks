@@ -28,6 +28,7 @@
 #include "cluster/redis_slot.h"
 #include "db_util.h"
 #include "server/redis_reply.h"
+#include "time_util.h"
 #include "types/redis_string.h"
 
 Status Parser::ParseFullDB() {
@@ -171,21 +172,293 @@ Status Parser::parseBitmapSegment(const Slice &ns, const Slice &user_key, int in
 }
 
 Status Parser::ParseWriteBatch(const std::string &batch_string) {
-  //  rocksdb::WriteBatch write_batch(batch_string);
-  //  WriteBatchExtractor write_batch_extractor(slot_id_encoded_, -1, true);
-  //
-  //  auto db_status = write_batch.Iterate(&write_batch_extractor);
-  //  if (!db_status.ok())
-  //    return {Status::NotOK, fmt::format("failed to iterate over the write batch: {}", db_status.ToString())};
-  //
-  //  auto resp_commands = write_batch_extractor.GetRESPCommands();
-  //  for (const auto &iter : *resp_commands) {
-  //    Status s;
-  //    //    = writer_->Write(iter.first, iter.second);
-  //    if (!s.IsOK()) {
-  //      LOG(ERROR) << "[kvrocks2redis] Failed to write to AOF from the write batch. Error: " << s.Msg();
-  //    }
+  rocksdb::WriteBatch write_batch(batch_string);
+  WriteBatchExtractor write_batch_extractor(slot_id_encoded_, -1, true);
+
+  auto db_status = write_batch.Iterate(&write_batch_extractor);
+  if (!db_status.ok())
+    return {Status::NotOK, fmt::format("failed to iterate over the write batch: {}", db_status.ToString())};
+
+  auto resp_commands = write_batch_extractor.GetRESPCommands();
+  for (const auto &iter : *resp_commands) {
+    Status s;
+    //    = writer_->Write(iter.first, iter.second);
+    if (!s.IsOK()) {
+      LOG(ERROR) << "[kvrocks2redis] Failed to write to AOF from the write batch. Error: " << s.Msg();
+    }
+  }
+
+  return Status::OK();
+}
+Status Parser::SeekAndDump() {
+  rocksdb::DB *db_ = storage_->GetDB();
+  if (!latest_snapshot_) latest_snapshot_ = std::make_unique<LatestSnapShot>(db_);
+  meta_cf_handle_ = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
+  subkey_cf_handle_ = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
+
+  rocksdb::ReadOptions read_options;
+  read_options.snapshot = latest_snapshot_->GetSnapShot();
+  read_options.fill_cache = false;
+  std::unique_ptr<rocksdb::Iterator> iter(db_->NewIterator(read_options, meta_cf_handle_));
+
+  // Create SST file writer
+  Status s;
+  rocksdb::EnvOptions env_opt;
+  rocksdb::Options rocks_opt = db_->GetOptions();
+  rocksdb::SstFileWriter *current_meta_sst_writer = new rocksdb::SstFileWriter(env_opt, rocks_opt, meta_cf_handle_);
+  rocksdb::SstFileWriter *current_subkey_sst_writer = new rocksdb::SstFileWriter(env_opt, rocks_opt, subkey_cf_handle_);
+  int meta_sst_no = 0;
+  int subkey_sst_no = 0;
+
+  auto rocks = current_meta_sst_writer->Open(output_dir_ + "/" + std::to_string(meta_sst_no));
+  if (!rocks.ok()) return {Status::NotOK, rocks.ToString()};
+  meta_files_.push_back(current_meta_sst_writer);
+
+  rocks = current_subkey_sst_writer->Open(output_dir_ + "/" + std::to_string(subkey_sst_no));
+  if (!rocks.ok()) return {Status::NotOK, rocks.ToString()};
+  subkey_files_.push_back(current_subkey_sst_writer);
+
+  for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+    Metadata metadata(kRedisNone);
+    metadata.Decode(iter->value().ToString());
+
+    if (metadata.Expired()) {  // ignore the expired key
+      continue;
+    }
+    std::string ns, user_key;
+    uint16_t slot;
+    ExtractNamespaceKey(iter->key(), &ns, &user_key, &slot);
+
+    if (slot_list_.count(slot) == 0) continue;  // it's not in one of our needed slot
+
+    if (metadata.Type() == kRedisString) {
+      s = DumpSimpleKV(iter->key(), iter->value(), metadata.expire);
+    } else {
+      s = DumpComplexKV(iter->key(), metadata, iter->value());
+    }
+    if (!s.IsOK()) return s;
+    if (meta_files_.back()->FileSize() > 128 * 1024 * 1024l) {
+      auto rocks = meta_files_.back()->Finish();
+      if (!rocks.ok()) return {Status::NotOK, rocks.ToString()};
+      meta_sst_no++;
+      rocks = current_meta_sst_writer->Open(output_dir_ + "/" + std::to_string(meta_sst_no));
+      if (!rocks.ok()) return {Status::NotOK, rocks.ToString()};
+      meta_files_.push_back(current_meta_sst_writer);
+    }
+
+    if (subkey_files_.back()->FileSize() > 128 * 1024 * 1024l) {
+      auto rocks = subkey_files_.back()->Finish();
+      if (!rocks.ok()) return {Status::NotOK, rocks.ToString()};
+      subkey_sst_no++;
+      rocks = current_subkey_sst_writer->Open(output_dir_ + "/" + std::to_string(subkey_sst_no));
+      if (!rocks.ok()) return {Status::NotOK, rocks.ToString()};
+      subkey_files_.push_back(current_subkey_sst_writer);
+    }
+  }
+  rocks = subkey_files_.back()->Finish();
+  if (!rocks.ok()) return {Status::NotOK, rocks.ToString()};
+  rocks = meta_files_.back()->Finish();
+  if (!rocks.ok()) return {Status::NotOK, rocks.ToString()};
+
+  return Status::OK();
+}
+Status Parser::DumpSimpleKV(const Slice &ns_key, const Slice &value, int expire) {
+  std::string ns, user_key;
+  //  ExtractNamespaceKey(ns_key, &ns, &user_key, true);  // Slot id is always encoded
+  auto rocks = meta_files_.back()->Put(ns_key, value);
+  if (!rocks.ok()) return {Status::NotOK, rocks.ToString()};
+  return Status::OK();
+}
+
+Status Parser::DumpComplexKV(const Slice &ns_key, const Metadata &metadata, const Slice &meta_value) {
+  auto current_meta = meta_files_.back();
+  auto current_subkey = subkey_files_.back();
+  RedisType type = metadata.Type();
+  if (type < kRedisHash || type > kRedisSortedint) {
+    return {Status::NotOK, "unknown metadata type: " + std::to_string(type)};
+  }
+  // All KV here must be in the target slots
+  std::string ns, user_key;
+  ExtractNamespaceKey(ns_key, &ns, &user_key, true);
+  std::string prefix_key;
+  InternalKey(ns_key, "", metadata.version, true).Encode(&prefix_key);
+  std::string next_version_prefix_key;
+  InternalKey(ns_key, "", metadata.version + 1, true).Encode(&next_version_prefix_key);
+
+  current_meta->Put(ns_key, meta_value);
+
+  rocksdb::ReadOptions read_options;
+  read_options.snapshot = latest_snapshot_->GetSnapShot();
+  rocksdb::Slice upper_bound(next_version_prefix_key);
+  read_options.iterate_upper_bound = &upper_bound;
+  storage_->SetReadOptions(read_options);
+
+  auto iter = DBUtil::UniqueIterator(storage_, read_options);
+  for (iter->Seek(prefix_key); iter->Valid(); iter->Next()) {
+    if (!iter->key().starts_with(prefix_key)) {
+      break;
+    }
+    InternalKey ikey(iter->key(), true);
+
+    std::string sub_key = ikey.GetSubKey().ToString();
+    current_subkey->Put(iter->key(), iter->value());
+  }
+  return Status::OK();
+}
+Status Parser::CompactAndMerge() {
+  std::vector<Slice> slot_prefix_list_;
+  // Step 0. Fill namespace if empty
+
+  auto db_ptr = storage_->GetDB();
+  rocksdb::ReadOptions read_options;
+  storage_->SetReadOptions(read_options);
+  if (!latest_snapshot_) latest_snapshot_ = std::make_unique<LatestSnapShot>(db_ptr);
+
+  read_options.snapshot = latest_snapshot_->GetSnapShot();
+  auto iter = DBUtil::UniqueIterator(storage_, read_options, meta_cf_handle_);
+
+  if (namespace_ == "") {
+    iter->SeekToFirst();
+    std::string ns, user_key;
+    ExtractNamespaceKey(iter->key(), &ns, &user_key, true);
+    std::cout << ns.size() << "(bytes), ns data:" << ns << std::endl;
+    namespace_ = ns;
+  }
+
+  // Step 1. Compose prefix key
+  for (int slot : slot_list_) {
+    std::string prefix;
+    ComposeSlotKeyPrefix(namespace_, slot, &prefix);
+    // After ComposeSlotKeyPrefix
+    //  +-------------|---------|-------|--------|---|-------|-------+
+    // |namespace_size|namespace|slot_id|, therefore we compare only the prefix key
+
+    // This is prefix key: and the subkey is empty
+    // +-------------|---------|-------|--------|---|-------|-------+
+    // |namespace_size|namespace|slot_id|key_size|key|version|subkey|
+    // +-------------|---------|-------|--------|---|-------|-------+
+    slot_prefix_list_.emplace_back(prefix);
+  }
+  // Therefore we need only the prefix key.
+  // Step 2. Find related SSTs.
+  // Get level files
+  rocksdb::ColumnFamilyMetaData metacf_ssts;
+  rocksdb::ColumnFamilyMetaData subkeycf_ssts;
+  storage_->GetDB()->GetColumnFamilyMetaData(meta_cf_handle_, &metacf_ssts);
+  storage_->GetDB()->GetColumnFamilyMetaData(subkey_cf_handle_, &subkeycf_ssts);
+  std::vector<std::string> meta_compact_sst_(0);
+  std::vector<std::string> subkey_compact_sst_(0);
+
+  std::cout << "Finding Meta" << std::endl;
+  for (const auto &level_stat : metacf_ssts.levels) {
+    for (const auto &sst_info : level_stat.files) {
+      for (Slice prefix : slot_prefix_list_) {
+        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
+            compare_with_prefix(sst_info.largestkey, prefix) > 0) {
+          meta_compact_sst_.push_back(sst_info.name);
+          break;  // no need for redundant inserting
+        }
+      }
+    }
+  }
+
+  std::cout << "Meta SST found:" << meta_compact_sst_.size() << std::endl;
+  std::cout << "Finding Subkey" << std::endl;
+  for (const auto &level_stat : subkeycf_ssts.levels) {
+    for (const auto &sst_info : level_stat.files) {
+      for (Slice prefix : slot_prefix_list_) {
+        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
+            compare_with_prefix(sst_info.largestkey, prefix) > 0) {
+          subkey_compact_sst_.push_back(sst_info.name);
+          break;
+        }
+      }
+    }
+  }
+  std::cout << "Subkey SST found:" << subkey_compact_sst_.size() << std::endl;
+  std::string sst_str;
+  for (const auto &s : meta_compact_sst_) {
+    sst_str += (s + ",");
+  }
+  sst_str.pop_back();
+
+  std::cout << "Meta SSTs:[" << sst_str << "]" << std::endl;
+  sst_str.clear();
+  for (const auto &s : subkey_compact_sst_) {
+    sst_str += (s + ",");
+  }
+  sst_str.pop_back();
+
+  std::cout << "Subkey SSTs:[" << sst_str << "]" << std::endl;
+
+  auto options = storage_->GetDB()->GetOptions();
+  rocksdb::CompactionOptions co;
+  co.compression = options.compression;
+  co.max_subcompactions = options.max_background_compactions;
+  // Step 3. Compact data to remove dead entries
+
+  auto start = Util::GetTimeStampMS();
+  std::vector<std::string> meta_compact_results;
+  std::vector<std::string> subkey_compact_results;
+
+  auto compact_s = storage_->GetDB()->CompactFiles(co, meta_cf_handle_, meta_compact_sst_, options.num_levels - 1, -1,
+                                                   &meta_compact_results);
+  if (!compact_s.ok()) {
+    return {Status::NotOK, compact_s.ToString()};
+  }
+
+  compact_s = storage_->GetDB()->CompactFiles(co, subkey_cf_handle_, subkey_compact_sst_, options.num_levels - 1, -1,
+                                              &subkey_compact_results);
+
+  if (!compact_s.ok()) {
+    return {Status::NotOK, compact_s.ToString()};
+  }
+  auto end = Util::GetTimeStampMS();
+  std::cout << "Compaction Time cost (ms): " << end - start << std::endl;
+
+  // Step 4. Copy the file to the remote, return
+  std::set<std::string> result_sets;
+
+  std::string source_ssts = "";
+  for (const auto &fn : meta_compact_results) {
+    result_sets.emplace(fn);
+  }
+  for (const auto &fn : subkey_compact_results) {
+    result_sets.emplace(fn);
+  }
+
+  for (const auto &fn : result_sets) {
+    source_ssts += (fn + " ");
+  }
+
+  std::string source_space = config_.src_db_dir;
+  std::string target_space = config_.dst_db_dir;
+
+  std::string mkdir_remote_cmd =
+      "ssh " + config_.remote_username + "@" + config_.dst_server_host + " mkdir -p " + config_.dst_db_dir;
+  std::cout << mkdir_remote_cmd << std::endl;
+  Status s = CheckCmdOutput(mkdir_remote_cmd);
+  if (!s.IsOK()) {
+    return {Status::NotOK, "Failed creating directory"};
+  }
+
+  start = Util::GetTimeStampMS();
+  std::string migration_cmds = "ls " + source_ssts + " |xargs -n 1 basename| parallel -v -j8 rsync -raz --progress " +
+                               source_space + "/{} " + config_.remote_username + "@" + config_.dst_server_host + ":" +
+                               target_space + "/{}";
+  //  for (auto migrate_candidate : result_sets) {
+  //    std::string migration_cmds = "rsync -raz " + source_space + sst_str + config_.remote_username + "@" +
+  //                                 config_.dst_server_host + ":" + target_space;
+
+  end = Util::GetTimeStampMS();
+  std::cout << migration_cmds << std::endl;
+  s = CheckCmdOutput(migration_cmds);
+  if (!s.IsOK()) {
+    std::cout << "File transmission error!" << s.Msg();
+    return {Status::NotOK, "Failed copying files"};
+  }
+  std::cout << "File copy time (ms): " << end - start << std::endl;
   //  }
-  //
+
   return Status::OK();
 }

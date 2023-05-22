@@ -180,7 +180,7 @@ Config::Config() {
       {"rocksdb.max_background_flushes", true, new IntField(&RocksDB.max_background_flushes, 2, 0, 32)},
       {"rocksdb.max_sub_compactions", false, new IntField(&RocksDB.max_sub_compactions, 1, 0, 16)},
       {"rocksdb.delayed_write_rate", false, new Int64Field(&RocksDB.delayed_write_rate, 0, 0, INT64_MAX)},
-      {"rocksdb.wal_ttl_seconds", true, new IntField(&RocksDB.WAL_ttl_seconds, 3 * 3600, 0, INT_MAX)},
+      {"rocksdb.wal_ttl_seconds", true, new IntField(&RocksDB.WAL_ttl_seconds, 0, 0, INT_MAX)},
       {"rocksdb.wal_size_limit_mb", true, new IntField(&RocksDB.WAL_size_limit_MB, 16384, 0, INT_MAX)},
       {"rocksdb.max_total_wal_size", false, new IntField(&RocksDB.max_total_wal_size, 64 * 4 * 2, 0, INT_MAX)},
       {"rocksdb.disable_auto_compactions", false, new YesNoField(&RocksDB.disable_auto_compactions, false)},

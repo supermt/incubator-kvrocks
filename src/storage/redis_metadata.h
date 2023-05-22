@@ -71,6 +71,15 @@ struct KeyNumStats {
   uint64_t avg_ttl = 0;
 };
 
+inline int compare_with_prefix(const std::string &x, const rocksdb::Slice &prefix) {
+  rocksdb::Slice x_slice(x);
+  return memcmp(x_slice.data_, prefix.data_, prefix.size_);
+}
+inline int compare_with_prefix(Slice &x, const rocksdb::Slice &prefix) {
+  return memcmp(x.data_, prefix.data_, prefix.size_);
+}
+
+void ExtractNamespaceKey(Slice ns_key, std::string *ns, std::string *key, uint16_t *slot_id);
 void ExtractNamespaceKey(Slice ns_key, std::string *ns, std::string *key, bool slot_id_encoded);
 void ComposeNamespaceKey(const Slice &ns, const Slice &key, std::string *ns_key, bool slot_id_encoded);
 void ComposeSlotKeyPrefix(const Slice &ns, int slotid, std::string *output);
@@ -84,6 +93,7 @@ class InternalKey {
   Slice GetNamespace() const;
   Slice GetKey() const;
   Slice GetSubKey() const;
+  int GetSlotID() const;
   uint64_t GetVersion() const;
   void Encode(std::string *out);
   bool operator==(const InternalKey &that) const;

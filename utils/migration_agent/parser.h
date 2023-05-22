@@ -48,21 +48,63 @@ class LatestSnapShot {
 
 class Parser {
  public:
-  explicit Parser(Engine::Storage *storage)
-      : storage_(storage), slot_id_encoded_(storage_->IsSlotIdEncoded()) {
+  explicit Parser(Engine::Storage *storage, std::vector<int> &slot_list, std::string &output_dir,
+                  std::string &namespace_str, MigrationAgent::Config &config)
+      : storage_(storage),
+        slot_id_encoded_(storage_->IsSlotIdEncoded()),
+        output_dir_(output_dir),
+        namespace_(namespace_str),
+        config_(config) {
     latest_snapshot_ = std::make_unique<LatestSnapShot>(storage->GetDB());
+    for (auto slot : slot_list) {
+      slot_list_.emplace(slot);
+    }
+    meta_cf_handle_ = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
+    subkey_cf_handle_ = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
   }
   ~Parser() = default;
 
+  Status SeekAndDump();
   Status ParseFullDB();
   Status ParseWriteBatch(const std::string &batch_string);
+
+  Status CompactAndMerge();
 
  protected:
   Engine::Storage *storage_ = nullptr;
   std::unique_ptr<LatestSnapShot> latest_snapshot_;
   bool slot_id_encoded_ = false;
+  std::string output_dir_;
 
+  std::set<int> slot_list_;
+  std::vector<rocksdb::SstFileWriter *> meta_files_;
+  std::vector<rocksdb::SstFileWriter *> subkey_files_;
+  Slice namespace_;
+
+  MigrationAgent::Config config_;
   Status parseSimpleKV(const Slice &ns_key, const Slice &value, int expire);
+  Status DumpSimpleKV(const Slice &ns_key, const Slice &value, int expire);
+  Status DumpComplexKV(const Slice &ns_key, const Metadata &metadata, const Slice &meta_value);
   Status parseComplexKV(const Slice &ns_key, const Metadata &metadata);
   Status parseBitmapSegment(const Slice &ns, const Slice &user_key, int index, const Slice &bitmap);
+  inline Status CheckCmdOutput(std::string &cmd) {
+    FILE *pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return {Status::NotOK, "Can not Execute result"};
+    char buffer[128];
+    while (fgets(buffer, 128, pipe)) {
+      std::string buffer_str = std::string(buffer);
+      buffer_str = Util::ToLower(buffer_str);
+      if (buffer_str.find("failed") != buffer_str.npos || buffer_str.find("error") != buffer_str.npos) {
+        pclose(pipe);
+        return {Status::NotOK, buffer_str};
+      }
+      if (buffer_str.find("MB/s") != buffer_str.npos) {
+        std::cout << "File transmission result:" << buffer_str << std::endl;
+      }
+    }
+    pclose(pipe);
+    return Status::OK();
+  }
+  rocksdb::ColumnFamilyHandle *meta_cf_handle_;
+  rocksdb::ColumnFamilyHandle *subkey_cf_handle_;
 };

@@ -107,7 +107,17 @@ bool InternalKey::operator==(const InternalKey &that) const {
   if (sub_key_ != that.sub_key_) return false;
   return version_ == that.version_;
 }
+int InternalKey::GetSlotID() const { return slotid_; }
+void ExtractNamespaceKey(Slice ns_key, std::string *ns, std::string *key, uint16_t *slot_id) {
+  uint8_t namespace_size = 0;
+  GetFixed8(&ns_key, &namespace_size);
+  *ns = ns_key.ToString().substr(0, namespace_size);
+  ns_key.remove_prefix(namespace_size);
 
+  GetFixed16(&ns_key, slot_id);
+
+  *key = ns_key.ToString();
+}
 void ExtractNamespaceKey(Slice ns_key, std::string *ns, std::string *key, bool slot_id_encoded) {
   uint8_t namespace_size = 0;
   GetFixed8(&ns_key, &namespace_size);

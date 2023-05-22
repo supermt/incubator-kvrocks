@@ -251,13 +251,6 @@ class CompactAndMergeMigrate : public SlotMigrate {
     input.erase(pos, input.end());
     return input;
   }
-  inline int compare_with_prefix(const std::string &x, const rocksdb::Slice &prefix) {
-    rocksdb::Slice x_slice(x);
-    return memcmp(x_slice.data_, prefix.data_, prefix.size_);
-  }
-  inline int compare_with_prefix(Slice &x, const rocksdb::Slice &prefix) {
-    return memcmp(x.data_, prefix.data_, prefix.size_);
-  }
 
  private:
   std::vector<std::string> compact_results;
