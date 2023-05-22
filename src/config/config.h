@@ -48,7 +48,7 @@ constexpr const char *TLS_AUTH_CLIENTS_OPTIONAL = "optional";
 
 enum MigrationStrategy : int {
   kSeekAndInsert = 0,
-  kSeekAndInsertBatched = 1,
+  kSeekAndIngestion = 1,
   kCompactAndMerge = 2,
   kLevelMigration = 3,
   kInvalidMigration
@@ -125,11 +125,13 @@ struct Config {
   std::vector<std::string> binds;
   std::string dir;
   std::string db_dir;
+  std::string sec_dir;
   std::string backup_dir;  // GUARD_BY(backup_mu_)
   std::string backup_sync_dir;
   std::string migration_sync_dir;
   std::string global_migration_sync_dir;
   std::string migration_user;
+  std::string migration_agent_location;
   std::string checkpoint_dir;
   std::string sync_checkpoint_dir;
   std::string log_dir;

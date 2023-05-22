@@ -133,7 +133,10 @@ Config::Config() {
       {"log-dir", true, new StringField(&log_dir, "")},
       {"migration_sync_dir", true, new StringField(&migration_sync_dir, "migration_sync")},
       {"global_migration_sync_dir", true, new StringField(&global_migration_sync_dir, "/tmp/migration_sync/")},
-      {"migration_user", true, new StringField(&migration_user, "supermt")},
+      {"migration_user", true, new StringField(&migration_user, "jinghua2")},
+      {"migration_agent_location", true,
+       new StringField(&migration_agent_location,
+                       "/home/supermt/CLionProjects/incubator-kvrocks/build/migration_agent")},
       {"log-level", true, new EnumField(&log_level, log_levels, google::INFO)},
       {"pidfile", true, new StringField(&pidfile, "")},
       {"max-io-mb", false, new IntField(&max_io_mb, 500, 0, INT_MAX)},
@@ -349,6 +352,7 @@ void Config::initFieldCallback() {
            }
          }
          if (log_dir.empty()) log_dir = dir;
+         sec_dir = dir + "/sec_db";
          checkpoint_dir = dir + "/checkpoint";
          sync_checkpoint_dir = dir + "/sync_checkpoint";
          backup_sync_dir = dir + "/backup_for_sync";

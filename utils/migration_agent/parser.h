@@ -87,24 +87,7 @@ class Parser {
   Status DumpComplexKV(const Slice &ns_key, const Metadata &metadata, const Slice &meta_value);
   Status parseComplexKV(const Slice &ns_key, const Metadata &metadata);
   Status parseBitmapSegment(const Slice &ns, const Slice &user_key, int index, const Slice &bitmap);
-  inline Status CheckCmdOutput(std::string &cmd) {
-    FILE *pipe = popen(cmd.c_str(), "r");
-    if (!pipe) return {Status::NotOK, "Can not Execute result"};
-    char buffer[128];
-    while (fgets(buffer, 128, pipe)) {
-      std::string buffer_str = std::string(buffer);
-      buffer_str = Util::ToLower(buffer_str);
-      if (buffer_str.find("failed") != buffer_str.npos || buffer_str.find("error") != buffer_str.npos) {
-        pclose(pipe);
-        return {Status::NotOK, buffer_str};
-      }
-      if (buffer_str.find("MB/s") != buffer_str.npos) {
-        std::cout << "File transmission result:" << buffer_str << std::endl;
-      }
-    }
-    pclose(pipe);
-    return Status::OK();
-  }
+
   rocksdb::ColumnFamilyHandle *meta_cf_handle_;
   rocksdb::ColumnFamilyHandle *subkey_cf_handle_;
 };

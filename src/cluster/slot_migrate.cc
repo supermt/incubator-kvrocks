@@ -217,6 +217,9 @@ void SlotMigrate::RunStateMachine() {
               state_machine_ = kSlotMigrateFailed;
             }
           }
+          // Skip WAL
+          LOG(INFO) << "Skip WAL migration, data has been compacted";
+          state_machine_ = kSlotMigrateSuccess;
         } else {
           auto s = SyncWal();
           if (s.IsOK()) {

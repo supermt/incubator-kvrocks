@@ -45,6 +45,7 @@ DEFINE_string(slot_str, "0,1,2,3,4,5,6,7,8,9,10,", "the slot number id list, lik
 DEFINE_int64(pull_method, 0, "How to do the pull-based method, 0 for compact-and-merge, 1 for seek-and-ingest");
 DEFINE_string(namespace_str, "", "The namespace of remote server");
 DEFINE_string(migration_user, "jinghua2", "The user name of remote server");
+DEFINE_string(candidate_ssts, "", "");
 
 std::function<void()> hup_handler;
 
@@ -120,6 +121,10 @@ int main(int argc, char *argv[]) {
   }
   std::cout << agent_config.ToString() << std::endl;
 
+  for (auto str : Util::Split(FLAGS_candidate_ssts, ",")) {
+    agent_config.input_files.push_back(str);
+  }
+
   initGoogleLog(&agent_config);
 
   if (agent_config.src_db_dir.back() != '/') agent_config.src_db_dir += '/';
@@ -128,10 +133,12 @@ int main(int argc, char *argv[]) {
   Config src_config;
   src_config.db_dir = agent_config.src_db_dir;
   src_config.slot_id_encoded = true;
+  src_config.sec_dir = src_config.db_dir + "/tmp/";
   Engine::Storage src_sst_store(&src_config);
 
   auto s = src_sst_store.Open(FLAGS_pull_method == 1);
   if (!s.IsOK()) {
+    std::cout << "Failed to open storage: " << s.Msg();
     LOG(ERROR) << "Failed to open Kvrocks storage: " << s.Msg();
     exit(-1);
   }
@@ -146,7 +153,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (!s.IsOK()) {
-    std::cout << "Seek and Dump error!";
+    std::cout << "Migration error!" << s.Msg();
     return -1;
   }
 

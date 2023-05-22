@@ -36,125 +36,56 @@
 #include "types/redis_string.h"
 
 Status CompactAndMergeMigrate::SendSnapshot() {
-  // This is the function to compact and merge the data
-  Status s;
-  storage_->GetDB()->PauseBackgroundWork();
-  s = PickSSTs();
+  auto src_config = svr_->GetConfig();
+  std::string src_info = "127.0.0.1:" + std::to_string(src_config->port) + "@" + src_config->db_dir;
+  std::string dst_info =
+      dst_ip_ + ":" + std::to_string(dst_port_) + "@" + src_config->global_migration_sync_dir + "/" + dst_node_;
+  std::string cwd;
+  rocksdb::Env::Default()->GetAbsolutePath(src_config->db_dir, &cwd);
+
+  std::string src_uri = cwd;  // src_uri + src_info = absolute path
+  if (src_uri.back() != '/') src_uri.push_back('/');
+  std::string dst_uri = "/";  // dst_uri + dst_info = absolute path
+  std::string migration_agent_path = src_config->migration_agent_location;
+  std::string pull_method = std::to_string(pull_method_);
+  std::string namespace_str = namespace_;
+  std::string migration_user = src_config->migration_user;
+
+  std::string slot_str;
+  int i = 0;
+  for (auto slot : migrate_slots_) {
+    i++;
+    if (i > 100) break;
+    slot_str += (std::to_string(slot) + ",");
+  }
+  slot_str.pop_back();
+  auto s = storage_->ReOpenDB(true);  // Set DB to readonly
+  if (!s.IsOK()) return s;
+  std::string agent_cmd = migration_agent_path + " --src_uri=" + src_uri + " --dst_uri=" + dst_uri +
+                          " --src_info=" + src_info + " --dst_info=" + dst_info + " --slot_str=" + slot_str +
+                          " --pull_method=" + pull_method + " --namespace_str=" + namespace_str +
+                          " --migration_user=" + migration_user;
+  LOG(INFO) << "Try migrating using remote commands: " << agent_cmd;
+  std::string worthy_result;
+  s = Util::CheckCmdOutput(agent_cmd, &worthy_result);
+  LOG(INFO) << "Migration agent returns with: " << worthy_result;
+  if (!worthy_result.empty()) {
+    LOG(INFO) << "Important results: " << worthy_result;
+  }
   if (!s.IsOK()) {
     return s;
   }
-  // Ask the writable DB instance to do the compaction
-  auto options = storage_->GetDB()->GetOptions();
-  rocksdb::CompactionOptions co;
-  co.compression = options.compression;
-  co.max_subcompactions = svr_->GetConfig()->max_bg_migration;
-  if (meta_compact_sst_.size() > 0) {
-    auto start = Util::GetTimeStampMS();
-
-    auto rocks_s = storage_->GetDB()->CompactFiles(co, GetMetadataCFH(), meta_compact_sst_, options.num_levels - 1, -1,
-                                                   &compact_results);
-    if (!rocks_s.ok()) {
-      std::string file_str = "[";
-      for (const auto &file : compact_results) {
-        file_str = file_str + file + ",";
-      }
-      file_str.pop_back();
-      file_str += "]";
-      LOG(ERROR) << "Compaction Failed, meta file list:" << file_str;
-      return {Status::NotOK, rocks_s.ToString()};
-    }
-    auto end = Util::GetTimeStampMS();
-    LOG(INFO) << "Meta SST compacted, Time cost (ms): " << end - start;
-    std::vector<std::string> filtered_sst;
-
-    s = FilterMetaSSTs(compact_results, &filtered_sst);
-    if (!s.IsOK()) {
-      return s;
-    }
-    s = SendRemoteSST(filtered_sst, Engine::kMetadataColumnFamilyName);
-    if (!s.IsOK()) {
-      return {s.GetCode(), "Send SST to remote failed, due to: " + s.Msg()};
-    }
-  }
-
-  compact_results.clear();
-  if (subkey_compact_sst_.size() > 0) {
-    auto start = Util::GetTimeStampMS();
-    auto rocks_s = storage_->GetDB()->CompactFiles(co, GetSubkeyCFH(), subkey_compact_sst_, options.num_levels - 1, -1,
-                                                   &compact_results);
-
-    if (!rocks_s.ok()) {
-      std::string file_str = "[";
-      for (const auto &file : compact_results) {
-        file_str = file_str + file + ",";
-      }
-      file_str.pop_back();
-      file_str += "]";
-      LOG(ERROR) << "Compaction Failed, meta file list:" << file_str;
-      return {Status::NotOK, rocks_s.ToString()};
-    }
-
-    auto end = Util::GetTimeStampMS();
-    LOG(INFO) << "Subkey SST compacted, Time cost (ms): " << end - start;
-
-    std::vector<std::string> filtered_sst;
-    s = FilterSubkeySSTs(compact_results, &filtered_sst);
-    if (!s.IsOK()) {
-      return s;
-    }
-    s = SendRemoteSST(filtered_sst, Engine::kSubkeyColumnFamilyName);
-    if (!s.IsOK()) {
-      return {s.GetCode(), "Send SST to remote failed, due to: " + s.Msg()};
-      return s;
-    }
-  }
-  storage_->GetDB()->ContinueBackgroundWork();
-
+  s = storage_->ReOpenDB(false);  // Restore DB to writable
+  if (!s.IsOK()) return s;
   return Status::OK();
 }
 
-void CompactAndMergeMigrate::CreateCFHandles() {
-  auto options = storage_->GetDB()->GetOptions();
-  rocksdb::ColumnFamilyOptions metadata_opts(options);
-  rocksdb::BlockBasedTableOptions metadata_table_opts = storage_->InitTableOptions();
-  metadata_opts.table_factory.reset(rocksdb::NewBlockBasedTableFactory(metadata_table_opts));
-  metadata_opts.compaction_filter_factory = std::make_shared<Engine::MetadataFilterFactory>(svr_->storage_);
-  metadata_opts.disable_auto_compactions = svr_->GetConfig()->RocksDB.disable_auto_compactions;
-  // Enable whole key bloom filter in memtable
-  metadata_opts.memtable_whole_key_filtering = true;
-  metadata_opts.memtable_prefix_bloom_size_ratio = 0.1;
-  metadata_opts.table_properties_collector_factories.emplace_back(
-      NewCompactOnExpiredTableCollectorFactory(Engine::kMetadataColumnFamilyName, 0.3));
-  svr_->storage_->SetBlobDB(&metadata_opts);
-
-  rocksdb::BlockBasedTableOptions subkey_table_opts = storage_->InitTableOptions();
-
-  subkey_table_opts.block_cache =
-      rocksdb::NewLRUCache(svr_->GetConfig()->RocksDB.subkey_block_cache_size * MiB, -1, false, 0.75);
-  subkey_table_opts.pin_l0_filter_and_index_blocks_in_cache = true;
-  subkey_table_opts.cache_index_and_filter_blocks = false;
-  subkey_table_opts.cache_index_and_filter_blocks_with_high_priority = true;
-  rocksdb::ColumnFamilyOptions subkey_opts(options);
-  subkey_opts.table_factory.reset(rocksdb::NewBlockBasedTableFactory(subkey_table_opts));
-  subkey_opts.compaction_filter_factory = std::make_shared<Engine::SubKeyFilterFactory>(svr_->storage_);
-  subkey_opts.disable_auto_compactions = svr_->GetConfig()->RocksDB.disable_auto_compactions;
-  subkey_opts.table_properties_collector_factories.emplace_back(
-      NewCompactOnExpiredTableCollectorFactory(Engine::kSubkeyColumnFamilyName, 0.3));
-  svr_->storage_->SetBlobDB(&subkey_opts);
-
-  cf_desc_.emplace_back(rocksdb::kDefaultColumnFamilyName, subkey_opts);
-  cf_desc_.emplace_back(Engine::kMetadataColumnFamilyName, metadata_opts);
-}
-CompactAndMergeMigrate::CompactAndMergeMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap)
-    : SlotMigrate(svr, migration_speed, pipeline_size_limit, seq_gap) {
+CompactAndMergeMigrate::CompactAndMergeMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap,
+                                               int pull_method)
+    : SlotMigrate(svr, migration_speed, pipeline_size_limit, seq_gap), pull_method_(pull_method) {
   this->batched_ = true;
 }
-rocksdb::ColumnFamilyHandle *CompactAndMergeMigrate::GetMetadataCFH() {
-  return svr_->storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
-}
-rocksdb::ColumnFamilyHandle *CompactAndMergeMigrate::GetSubkeyCFH() {
-  return svr_->storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
-}
+
 Status CompactAndMergeMigrate::SetMigrationSlots(std::vector<int> &target_slots) {
   if (!migrate_slots_.empty() || this->IsMigrationInProgress()) {
     return {Status::NotOK, "Last Migrate Batch is not finished"};
@@ -168,13 +99,6 @@ Status CompactAndMergeMigrate::MigrateStart(Server *svr, const std::string &node
   migrate_state_ = kMigrateStarted;
   dst_node_ = node_id;
 
-  for (int slot : migrate_slots_) {
-    std::string prefix;
-    ComposeSlotKeyPrefix(namespace_, slot, &prefix);
-    slot_prefix_list_.push_back(prefix);
-    subkey_prefix_list_.emplace_back(ExtractSubkeyPrefix(Slice(slot_prefix_list_.back())));
-  }
-
   auto job = std::make_unique<SlotMigrateJob>(migrate_slots_, dst_ip, dst_port, 0, 16, seq_gap);
   LOG(INFO) << "[migrate] Start migrating slots, from slot: " << migrate_slots_.front()
             << " to slot: " << migrate_slots_.back() << ". Slots are moving to " << dst_ip << ":" << dst_port;
@@ -185,284 +109,92 @@ Status CompactAndMergeMigrate::MigrateStart(Server *svr, const std::string &node
   }
   return Status::OK();
 }
-
-Status CompactAndMergeMigrate::PickSSTs() {
-  rocksdb::ReadOptions read_options;
-  read_options.snapshot = slot_snapshot_;
-  storage_->SetReadOptions(read_options);
-  rocksdb::ColumnFamilyHandle *meta_cf_handle = GetMetadataCFH();
-  //  auto iter = DBUtil::UniqueIterator(storage_->GetDB()->NewIterator(read_options, meta_cf_handle));
-  rocksdb::ColumnFamilyMetaData metacf_ssts;
-  svr_->storage_->GetDB()->GetColumnFamilyMetaData(meta_cf_handle, &metacf_ssts);
-
-  for (const auto &meta_level_stat : metacf_ssts.levels) {
-    for (const auto &meta_sst : meta_level_stat.files) {
-      for (Slice prefix : slot_prefix_list_) {
-        if (compare_with_prefix(meta_sst.smallestkey, prefix) < 0 &&
-            compare_with_prefix(meta_sst.largestkey, prefix) > 0) {
-          meta_compact_sst_.push_back(meta_sst.name);
-        }
-      }
-    }
-  }
-
-  rocksdb::ColumnFamilyMetaData subkeycf_ssts;
-  // sort the prefix to avoid repeat searching
-  std::sort(subkey_prefix_list_.begin(), subkey_prefix_list_.end());
-
-  svr_->storage_->GetDB()->GetColumnFamilyMetaData(GetSubkeyCFH(), &subkeycf_ssts);
-  for (const auto &level_stat : subkeycf_ssts.levels) {
-    for (const auto &sst_info : level_stat.files) {
-      for (Slice prefix : subkey_prefix_list_) {
-        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
-            compare_with_prefix(sst_info.largestkey, prefix) > 0)
-          subkey_compact_sst_.push_back(sst_info.name);
-      }
-    }
-  }
-  // Erase redundant SSTs
-  meta_compact_sst_ = UniqueVector(meta_compact_sst_);
-  subkey_compact_sst_ = UniqueVector(subkey_compact_sst_);
-  std::string file_str;
-  file_str = "meta list: [ ";
-  for (auto sst : meta_compact_sst_) {
-    file_str = file_str + sst + ',';
-  }
-  file_str.pop_back();
-  file_str += "], subkey list: [ ";
-  for (auto sst : subkey_compact_sst_) {
-    file_str = file_str + sst + ',';
-  }
-  file_str.pop_back();
-  file_str += "]";
-  LOG(INFO) << "Collected SSTables " << file_str;
-
-  return Status::OK();
-}
-std::string CompactAndMergeMigrate::ExtractSubkeyPrefix(const Slice &slot_prefix) {
-  rocksdb::ReadOptions read_options;
-  read_options.snapshot = slot_snapshot_;
-  storage_->SetReadOptions(read_options);
-  auto iter = DBUtil::UniqueIterator(svr_->storage_->GetDB()->NewIterator(read_options, GetMetadataCFH()));
-
-  iter->Seek(slot_prefix);
-  Slice first_slot_key = iter->key();
-  std::string ns, user_key;
-  ExtractNamespaceKey(first_slot_key, &ns, &user_key, true);
-
-  std::string slot_key, prefix_subkey;
-  AppendNamespacePrefix(user_key, &slot_key);
-  std::string bytes = iter->value().ToString();
-  Metadata metadata(kRedisNone, false);
-  metadata.Decode(bytes);
-
-  InternalKey(slot_key, "", metadata.version, true).Encode(&prefix_subkey);
-  return prefix_subkey;
-}
-Status CompactAndMergeMigrate::SendRemoteSST(std::vector<std::string> &file_list,
-                                             const std::string &column_family_name) {
-  Status s;
-  std::string source_ssts;
-  std::string file_str;
-  for (auto &file_name : file_list) {
-    source_ssts += ((file_name) + " ");
-    file_str += (Util::Split(file_name, "/").back() + ",");
-  }
-  source_ssts.pop_back();
-  file_str.pop_back();
-  LOG(INFO) << "Sending files: " << source_ssts;
-
-  switch (svr_->GetConfig()->sst_transport_method) {
-    case kNetwork: {
-      std::string cmds;
-      std::string file_str;
-
-      for (auto &file_name : file_list) {
-        std::string rel_path = Util::Split(file_name, "/").back();
-        file_str = file_str + rel_path + ",";
-      }
-      file_str.pop_back();
-      cmds = Redis::MultiBulkString({"sst_ingest", "remote", column_family_name, file_str, svr_->cluster_->GetMyId()},
-                                    false);
-
-      auto fd = Util::SockConnect(dst_ip_, dst_port_);
-      if (!fd.IsOK()) {
-        return fd;
-      }
-
-      s = Util::SockSend(*fd, cmds);
-
-      if (!s.IsOK()) {
-        return s;
-      }
-      s = CheckResponseOnce(*fd);
-      if (!s.IsOK()) {
-        return s;
-      }
-
-      return Status::OK();
-    }
-    case kSCP: {
-      std::string cmds;
-
-      auto source_space = svr_->GetConfig()->global_migration_sync_dir + "/" + std::to_string(svr_->GetConfig()->port);
-      auto target_space = svr_->GetConfig()->global_migration_sync_dir + "/" + std::to_string(dst_port_);
-      cmds = "ls " + source_ssts + " |xargs -n 1 basename| parallel -v -j8 rsync -raz " + source_space + "/{} " +
-             svr_->GetConfig()->migration_user + "@" + dst_ip_ + ":" + target_space + "/{}";
-      LOG(INFO) << cmds;
-      int status = system(cmds.c_str());
-      if (status < 0) {
-        LOG(ERROR) << "Rsync send file error: " << strerror(errno) << '\n';
-        return {Status::NotOK, fmt::format("Rsync send file error: {}", strerror(errno))};
-      }
-
-      cmds = Redis::MultiBulkString({"sst_ingest", "local", column_family_name, file_str, svr_->cluster_->GetMyId()},
-                                    false);
-
-      auto fd = Util::SockConnect(dst_ip_, dst_port_);
-
-      if (!fd.IsOK()) {
-        return fd;
-      }
-
-      s = Util::SockSend(*fd, cmds);
-
-      if (!s.IsOK()) {
-        return s;
-      }
-      s = CheckResponseOnce(*fd);
-      if (!s.IsOK()) {
-        return s;
-      }
-      return Status::OK();
-    }
-
-    default:
-      return {Status::NotOK,
-              "File transportation is invalid" + std::to_string(svr_->GetConfig()->sst_transport_method)};
-  }
-}
-Status CompactAndMergeMigrate::FilterMetaSSTs(const std::vector<std::string> &input_list,
-                                              std::vector<std::string> *output_list) {
-  auto opt = svr_->storage_->GetDB()->GetOptions();
-  rocksdb::SstFileReader sst_file_reader(opt);
-  rocksdb::ReadOptions ropts;
-  rocksdb::SstFileWriter writer(rocksdb::EnvOptions(opt), opt, GetMetadataCFH());
-  uint64_t valid = 0;
-  auto start = Util::GetTimeStampMS();
-
-  for (auto &file : input_list) {
-    // Create SST reader
-    auto ros = sst_file_reader.Open(file);  // rocksdb open status;
-    if (!ros.ok()) {
-      return {Status::NotOK, "failed on reading" + ros.ToString()};
-    }
-    auto sst_name = Util::Split(file, "/").back();
-
-    std::string out_name = "";
-    switch (svr_->GetConfig()->sst_transport_method) {
-      case kNetwork: {
-        out_name = file + ".bck";
-        break;
-      }
-      case kSCP: {
-        out_name =
-            svr_->GetConfig()->global_migration_sync_dir + std::to_string(svr_->GetConfig()->port) + "/" + sst_name;
-        break;
-      }
-      default:
-        return {Status::NotOK, "Unknown file transmission"};
-    }
-
-    output_list->push_back(out_name);
-    LOG(INFO) << "Start filtering, target file: " << out_name;
-    ros = writer.Open(out_name);
-    if (!ros.ok()) {
-      return {Status::NotOK, "failed on writing" + ros.ToString()};
-    }
-    std::unique_ptr<rocksdb::Iterator> iter(sst_file_reader.NewIterator(ropts));
-    iter->SeekToFirst();
-    for (; iter->Valid(); iter->Next()) {
-      // meta family, with specific prefix
-      //      for (const auto &prefix : slot_prefix_list_) {
-      //        if (iter->key().starts_with(prefix)) {
-      writer.Put(iter->key(), iter->value());
-      //          valid++;
-      //        }
-      //      }
-    }
-    ros = writer.Finish();
-    if (!ros.ok()) {
-      return {Status::NotOK, "Write out error, " + ros.ToString()};
-    }
-    // end of reading file
-  }
-  auto end = Util::GetTimeStampMS();
-  LOG(INFO) << "Meta SST filtered, # of valid entries: " << valid << ", time taken (ms): " << end - start;
-  return Status::OK();
-}
-Status CompactAndMergeMigrate::FilterSubkeySSTs(const std::vector<std::string> &input_list,
-                                                std::vector<std::string> *output_list) {
-  auto opt = svr_->storage_->GetDB()->GetOptions();
-  rocksdb::SstFileReader sst_file_reader(opt);
-  rocksdb::ReadOptions ropts;
-  rocksdb::SstFileWriter writer(rocksdb::EnvOptions(opt), opt);
-  uint64_t valid = 0;
-  auto start = Util::GetTimeStampMS();
-
-  for (auto file : input_list) {
-    auto ros = sst_file_reader.Open(file);  // rocksdb open status;
-    if (!ros.ok()) {
-      return {Status::NotOK, "failed on reading" + ros.ToString()};
-    }
-
-    auto sst_name = Util::Split(file, "/").back();
-
-    std::string out_name = "";
-    switch (svr_->GetConfig()->sst_transport_method) {
-      case kNetwork: {
-        out_name = file + ".bck";
-        break;
-      }
-      case kSCP: {
-        out_name =
-            svr_->GetConfig()->global_migration_sync_dir + std::to_string(svr_->GetConfig()->port) + "/" + sst_name;
-        break;
-      }
-      default:
-        return {Status::NotOK, "Unknown file transmission"};
-    }
-
-    output_list->push_back(out_name);
-    ros = writer.Open(out_name);
-
-    std::unique_ptr<rocksdb::Iterator> iter(sst_file_reader.NewIterator(ropts));
-    iter->SeekToFirst();
-    auto smallest = iter->key();
-    std::string smallest_prefix;
-    // find the smallest prefix that is larger than this smallest value;
-    for (const auto &prefix : subkey_prefix_list_) {
-      if (compare_with_prefix(smallest, prefix) < 0) {
-        smallest_prefix = prefix;
-        break;
-      }
-    }
-    for (; iter->Valid(); iter->Next()) {
-      //      auto cur_key = iter->key();
-      //      if (compare_with_prefix(cur_key, smallest_prefix) < 0) {
-      //        // it's in the range
-      //        valid++;
-      //        writer.Put(iter->key(), iter->value());
-      //      }
-      writer.Put(iter->key(), iter->value());
-    }  // end of entry scanning
-
-    ros = writer.Finish();
-    if (!ros.ok()) {
-      return {Status::NotOK, "Write out error, " + ros.ToString()};
-    }
-  }
-  auto end = Util::GetTimeStampMS();
-  LOG(INFO) << "Subkey SSTs filtered, # of valid entries: " << valid << ", time taken (ms): " << end - start;
-  return Status::OK();
+void CompactAndMergeMigrate::PickSSTs() {
+  //  auto db_ptr = storage_->GetDB();
+  //  rocksdb::ReadOptions read_options;
+  //  storage_->SetReadOptions(read_options);
+  //
+  //  rocksdb::ColumnFamilyHandle *meta_cf_handle_;
+  //  rocksdb::ColumnFamilyHandle *subkey_cf_handle_;
+  //  meta_cf_handle_ = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
+  //  subkey_cf_handle_ = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
+  //
+  //  read_options.snapshot = this->slot_snapshot_;
+  //  auto iter = DBUtil::UniqueIterator(storage_, read_options, meta_cf_handle_);
+  //
+  //  if (namespace_ == "") {
+  //    iter->SeekToFirst();
+  //    std::string ns, user_key;
+  //    ExtractNamespaceKey(iter->key(), &ns, &user_key, true);
+  //    std::cout << ns.size() << "(bytes), ns data:" << ns << std::endl;
+  //    namespace_ = ns;
+  //  }
+  //
+  //  // Step 1. Compose prefix key
+  //  for (int slot : migrate_slots_) {
+  //    std::string prefix;
+  //    ComposeSlotKeyPrefix(namespace_, slot, &prefix);
+  //    // After ComposeSlotKeyPrefix
+  //    //  +-------------|---------|-------|--------|---|-------|-------+
+  //    // |namespace_size|namespace|slot_id|, therefore we compare only the prefix key
+  //
+  //    // This is prefix key: and the subkey is empty
+  //    // +-------------|---------|-------|--------|---|-------|-------+
+  //    // |namespace_size|namespace|slot_id|key_size|key|version|subkey|
+  //    // +-------------|---------|-------|--------|---|-------|-------+
+  //    slot_prefix_list_.emplace_back(prefix);
+  //  }
+  //  // Therefore we need only the prefix key.
+  //  // Step 2. Find related SSTs.
+  //  // Get level files
+  //  rocksdb::ColumnFamilyMetaData metacf_ssts;
+  //  rocksdb::ColumnFamilyMetaData subkeycf_ssts;
+  //  storage_->GetDB()->GetColumnFamilyMetaData(meta_cf_handle_, &metacf_ssts);
+  //  storage_->GetDB()->GetColumnFamilyMetaData(subkey_cf_handle_, &subkeycf_ssts);
+  //  std::vector<std::string> meta_compact_sst_(0);
+  //  std::vector<std::string> subkey_compact_sst_(0);
+  //
+  //  std::cout << "Finding Meta" << std::endl;
+  //  for (const auto &level_stat : metacf_ssts.levels) {
+  //    for (const auto &sst_info : level_stat.files) {
+  //      for (Slice prefix : slot_prefix_list_) {
+  //        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
+  //            compare_with_prefix(sst_info.largestkey, prefix) > 0) {
+  //          meta_compact_sst_.push_back(sst_info.name);
+  //          break;  // no need for redundant inserting
+  //        }
+  //      }
+  //    }
+  //  }
+  //
+  //  LOG(INFO) << "Meta SST found:" << meta_compact_sst_.size() << std::endl;
+  //  LOG(INFO) << "Finding Subkey" << std::endl;
+  //  for (const auto &level_stat : subkeycf_ssts.levels) {
+  //    for (const auto &sst_info : level_stat.files) {
+  //      for (Slice prefix : slot_prefix_list_) {
+  //        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
+  //            compare_with_prefix(sst_info.largestkey, prefix) > 0) {
+  //          subkey_compact_sst_.push_back(sst_info.name);
+  //          break;
+  //        }
+  //      }
+  //    }
+  //  }
+  //  LOG(INFO) << "Subkey SST found:" << subkey_compact_sst_.size() << std::endl;
+  //  std::string sst_str;
+  //  for (const auto &s : meta_compact_sst_) {
+  //    sst_str += (s + ",");
+  //  }
+  //  sst_str.pop_back();
+  //
+  //  LOG(INFO) << "Meta SSTs:[" << sst_str << "]" << std::endl;
+  //  sst_str.clear();
+  //  for (const auto &s : subkey_compact_sst_) {
+  //    sst_str += (s + ",");
+  //  }
+  //  sst_str.pop_back();
+  //
+  //  LOG(INFO) << "Subkey SSTs:[" << sst_str << "]" << std::endl;
+  //
+  //  db_ptr->CompactFiles();
 }

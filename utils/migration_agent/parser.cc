@@ -27,6 +27,7 @@
 
 #include "cluster/redis_slot.h"
 #include "db_util.h"
+#include "rocksdb/convenience.h"
 #include "server/redis_reply.h"
 #include "time_util.h"
 #include "types/redis_string.h"
@@ -172,21 +173,21 @@ Status Parser::parseBitmapSegment(const Slice &ns, const Slice &user_key, int in
 }
 
 Status Parser::ParseWriteBatch(const std::string &batch_string) {
-  rocksdb::WriteBatch write_batch(batch_string);
-  WriteBatchExtractor write_batch_extractor(slot_id_encoded_, -1, true);
+  //  rocksdb::WriteBatch write_batch(batch_string);
+  //  WriteBatchExtractor write_batch_extractor(slot_id_encoded_, -1, true);
+  //
+  //  auto db_status = write_batch.Iterate(&write_batch_extractor);
+  //  if (!db_status.ok())
+  //    return {Status::NotOK, fmt::format("failed to iterate over the write batch: {}", db_status.ToString())};
 
-  auto db_status = write_batch.Iterate(&write_batch_extractor);
-  if (!db_status.ok())
-    return {Status::NotOK, fmt::format("failed to iterate over the write batch: {}", db_status.ToString())};
-
-  auto resp_commands = write_batch_extractor.GetRESPCommands();
-  for (const auto &iter : *resp_commands) {
-    Status s;
-    //    = writer_->Write(iter.first, iter.second);
-    if (!s.IsOK()) {
-      LOG(ERROR) << "[kvrocks2redis] Failed to write to AOF from the write batch. Error: " << s.Msg();
-    }
-  }
+  //  auto resp_commands = write_batch_extractor.GetRESPCommands();
+  //  for (const auto &iter : *resp_commands) {
+  //    Status s;
+  //    //    = writer_->Write(iter.first, iter.second);
+  //    if (!s.IsOK()) {
+  //      LOG(ERROR) << "[kvrocks2redis] Failed to write to AOF from the write batch. Error: " << s.Msg();
+  //    }
+  //  }
 
   return Status::OK();
 }
@@ -228,7 +229,7 @@ Status Parser::SeekAndDump() {
     std::string ns, user_key;
     uint16_t slot;
     ExtractNamespaceKey(iter->key(), &ns, &user_key, &slot);
-
+    std::cout << iter->key().ToString(true) << ". Slot id: " << slot << std::endl;
     if (slot_list_.count(slot) == 0) continue;  // it's not in one of our needed slot
 
     if (metadata.Type() == kRedisString) {
@@ -313,7 +314,8 @@ Status Parser::CompactAndMerge() {
   rocksdb::ReadOptions read_options;
   storage_->SetReadOptions(read_options);
   if (!latest_snapshot_) latest_snapshot_ = std::make_unique<LatestSnapShot>(db_ptr);
-
+  //  CancelAllBackgroundWork(db_ptr, true);
+  db_ptr->PauseBackgroundWork();
   read_options.snapshot = latest_snapshot_->GetSnapShot();
   auto iter = DBUtil::UniqueIterator(storage_, read_options, meta_cf_handle_);
 
@@ -391,16 +393,15 @@ Status Parser::CompactAndMerge() {
 
   std::cout << "Subkey SSTs:[" << sst_str << "]" << std::endl;
 
-  auto options = storage_->GetDB()->GetOptions();
-  rocksdb::CompactionOptions co;
-  co.compression = options.compression;
-  co.max_subcompactions = options.max_background_compactions;
   // Step 3. Compact data to remove dead entries
 
   auto start = Util::GetTimeStampMS();
   std::vector<std::string> meta_compact_results;
   std::vector<std::string> subkey_compact_results;
-
+  auto options = storage_->GetDB()->GetOptions();
+  rocksdb::CompactionOptions co;
+  co.compression = options.compression;
+  co.max_subcompactions = options.max_background_compactions;
   auto compact_s = storage_->GetDB()->CompactFiles(co, meta_cf_handle_, meta_compact_sst_, options.num_levels - 1, -1,
                                                    &meta_compact_results);
   if (!compact_s.ok()) {
@@ -409,10 +410,10 @@ Status Parser::CompactAndMerge() {
 
   compact_s = storage_->GetDB()->CompactFiles(co, subkey_cf_handle_, subkey_compact_sst_, options.num_levels - 1, -1,
                                               &subkey_compact_results);
-
   if (!compact_s.ok()) {
     return {Status::NotOK, compact_s.ToString()};
   }
+  db_ptr->ContinueBackgroundWork();
   auto end = Util::GetTimeStampMS();
   std::cout << "Compaction Time cost (ms): " << end - start << std::endl;
 
@@ -437,7 +438,9 @@ Status Parser::CompactAndMerge() {
   std::string mkdir_remote_cmd =
       "ssh " + config_.remote_username + "@" + config_.dst_server_host + " mkdir -p " + config_.dst_db_dir;
   std::cout << mkdir_remote_cmd << std::endl;
-  Status s = CheckCmdOutput(mkdir_remote_cmd);
+  std::string worthy_result;
+  Status s = Util::CheckCmdOutput(mkdir_remote_cmd, &worthy_result);
+  std::cout << worthy_result << std::endl;
   if (!s.IsOK()) {
     return {Status::NotOK, "Failed creating directory"};
   }
@@ -452,7 +455,9 @@ Status Parser::CompactAndMerge() {
 
   end = Util::GetTimeStampMS();
   std::cout << migration_cmds << std::endl;
-  s = CheckCmdOutput(migration_cmds);
+  worthy_result.clear();
+  s = Util::CheckCmdOutput(migration_cmds, &worthy_result);
+  std::cout << worthy_result << std::endl;
   if (!s.IsOK()) {
     std::cout << "File transmission error!" << s.Msg();
     return {Status::NotOK, "Failed copying files"};

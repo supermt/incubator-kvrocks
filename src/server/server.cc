@@ -1740,14 +1740,14 @@ Status Server::ChooseMigrationMethod() {
             std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
         break;
       }
-      case kSeekAndInsertBatched: {
-        slot_migrate_ = std::make_unique<ParallelSlotMigrate>(this, config_->migrate_speed, config_->pipeline_size,
-                                                              config_->sequence_gap);
+      case kSeekAndIngestion: {
+        slot_migrate_ = std::make_unique<CompactAndMergeMigrate>(this, config_->migrate_speed, config_->pipeline_size,
+                                                                 config_->sequence_gap, 1);
         break;
       }
       case kCompactAndMerge: {
-        this->slot_migrate_ = std::make_unique<CompactAndMergeMigrate>(this, config_->migrate_speed,
-                                                                       config_->pipeline_size, config_->sequence_gap);
+        this->slot_migrate_ = std::make_unique<CompactAndMergeMigrate>(
+            this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap, 0);
         break;
       }
       case kLevelMigration: {

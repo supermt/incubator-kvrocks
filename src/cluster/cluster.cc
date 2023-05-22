@@ -839,7 +839,7 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
     case kSeekAndInsert: {
       return {Status::NotOK, "This migration method does not support multi-slot migration"};
     }
-    case kSeekAndInsertBatched:
+    case kSeekAndIngestion:
     case kCompactAndMerge:
     case kLevelMigration: {
       // strange bug, this server can not get the selected migration method

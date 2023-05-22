@@ -53,6 +53,8 @@ struct Config {
   int dst_server_port = 40002;
   std::vector<int> slot_list;
   std::string remote_username;
+  std::vector<std::string> input_files;
+  std::string compaction_input_binary_;
 
  public:
   Status Load(std::string path);

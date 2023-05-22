@@ -144,7 +144,7 @@ class SlotMigrate : public Redis::Database {
   virtual Status SendSnapshot();
   Status SyncWal();
   Status Success();
-  Status UpdateTopo(int slot,std::string dst_server);
+  Status UpdateTopo(int slot, std::string dst_server);
   Status Fail();
   virtual void Clean();
 
@@ -238,7 +238,7 @@ class CompactAndMergeMigrate : public SlotMigrate {
  public:
   explicit CompactAndMergeMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
                                   int pipeline_size_limit = kDefaultPipelineSizeLimit,
-                                  int seq_gap = kDefaultSeqGapLimit);
+                                  int seq_gap = kDefaultSeqGapLimit, int pull_method = 0);
   Status SetMigrationSlots(std::vector<int> &target_slots) override;
 
   std::string GetName() override { return "compact-and-merge"; }
@@ -252,23 +252,15 @@ class CompactAndMergeMigrate : public SlotMigrate {
     return input;
   }
 
+  int pull_method_;
+  void PickSSTs();
+
  private:
-  std::vector<std::string> compact_results;
-  std::vector<rocksdb::ColumnFamilyDescriptor> cf_desc_;
-  std::vector<std::string> subkey_compact_sst_;
-  std::vector<std::string> meta_compact_sst_;
-  std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
-  void CreateCFHandles();
+  std::vector<std::string> meta_ssts;
+  std::vector<std::string> subkey_ssts;
 
  protected:
   Status SendSnapshot() override;
-  Status PickSSTs();
-  std::string ExtractSubkeyPrefix(const Slice &slot_prefix);
-  rocksdb::ColumnFamilyHandle *GetMetadataCFH();
-  rocksdb::ColumnFamilyHandle *GetSubkeyCFH();
-  Status SendRemoteSST(std::vector<std::string> &file_list, const std::string &column_family);
-  Status FilterMetaSSTs(const std::vector<std::string> &input_list, std::vector<std::string> *output_list);
-  Status FilterSubkeySSTs(const std::vector<std::string> &input_list, std::vector<std::string> *output_list);
   //  rocksdb::DB *compact_ptr;
   std::vector<std::string> slot_prefix_list_;
   std::vector<std::string> subkey_prefix_list_;
@@ -278,18 +270,4 @@ class LevelMigrate : public CompactAndMergeMigrate {
  public:
   explicit LevelMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
                         int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
-
- protected:
-  Status SendSnapshot() override;
-  Status PickMetaSSTForLevel(int level);
-  Status PickSubkeySSTForLevel(int level);
-  Status SendRemoteSST();
-
-  virtual std::string GetName() { return "Level-based"; }
-
- private:
-  rocksdb::ColumnFamilyMetaData metacf_level_stats;
-  rocksdb::ColumnFamilyMetaData subkey_stats;
-  std::vector<std::string> pend_sending_sst_meta;
-  std::vector<std::string> pend_sending_sst_subkey;
 };

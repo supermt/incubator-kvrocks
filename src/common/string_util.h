@@ -36,5 +36,23 @@ int StringMatch(const std::string &pattern, const std::string &in, int nocase);
 int StringMatchLen(const char *p, size_t plen, const char *s, size_t slen, int nocase);
 std::string StringToHex(const std::string &input);
 std::vector<std::string> TokenizeRedisProtocol(const std::string &value);
-
+inline Status CheckCmdOutput(std::string &cmd, std::string *output) {
+  FILE *pipe = popen(cmd.c_str(), "r");
+  if (!pipe) return {Status::NotOK, "Can not Execute result"};
+  char buffer[128];
+  while (fgets(buffer, 128, pipe)) {
+    std::string buffer_str = std::string(buffer);
+    buffer_str = Util::ToLower(buffer_str);
+    *output += buffer_str;
+    if (buffer_str.find("failed") != buffer_str.npos || buffer_str.find("error") != buffer_str.npos) {
+      pclose(pipe);
+      return {Status::NotOK, buffer_str};
+    }
+    //    if (buffer_str.find("MB/s") != buffer_str.npos) {
+    //      *worthy_result += (buffer_str);
+    //    }
+  }
+  pclose(pipe);
+  return Status::OK();
+}
 }  // namespace Util

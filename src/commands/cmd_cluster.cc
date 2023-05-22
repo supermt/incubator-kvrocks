@@ -427,7 +427,7 @@ class CommandClusterX : public Commander {
       *output = Redis::BulkString(std::to_string(v));
     } else if (subcommand_ == "migrate") {
       Status s;
-      if (svr->GetConfig()->migrate_method < kSeekAndInsertBatched) {
+      if (svr->GetConfig()->migrate_method < kSeekAndIngestion) {
         s = svr->cluster_->MigrateSlot(static_cast<int>(slot_), dst_node_id_);
       } else {
         s = svr->cluster_->MigrateSlots(slots_, dst_node_id_);
