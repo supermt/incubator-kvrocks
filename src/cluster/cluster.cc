@@ -931,14 +931,20 @@ Status Cluster::FetchFileFromRemote(const std::string &server_id, std::vector<st
   }
   return Status::OK();
 }
-Status Cluster::IngestFiles(const std::string &column_family, const std::vector<std::string> &files) {
+Status Cluster::IngestFiles(const std::string &column_family, const std::vector<std::string> &files, bool fast_ingest,
+                            int target_level) {
   auto cfh = svr_->storage_->GetCFHandle(column_family);
   rocksdb::Options opt = svr_->storage_->GetDB()->GetOptions();
   rocksdb::IngestExternalFileOptions ifo;
-  ifo.allow_global_seqno = true;
-  ifo.write_global_seqno = true;
-  ifo.verify_checksums_before_ingest = false;
-  ifo.ingest_behind = false;
+  if (fast_ingest) {
+    ifo.sub_tier_mode = true;
+    ifo.sub_tier_base = target_level;
+  } else {
+    ifo.allow_global_seqno = true;
+    ifo.write_global_seqno = true;
+    ifo.verify_checksums_before_ingest = false;
+    ifo.ingest_behind = false;
+  }
 
   //  ing_options.move_files = true;
   auto start_ms = Util::GetTimeStampMS();

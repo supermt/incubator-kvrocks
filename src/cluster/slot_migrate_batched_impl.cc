@@ -69,10 +69,8 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   std::string worthy_result;
   s = Util::CheckCmdOutput(agent_cmd, &worthy_result);
   LOG(INFO) << "Migration agent returns with: " << worthy_result;
-  if (!worthy_result.empty()) {
-    LOG(INFO) << "Important results: " << worthy_result;
-  }
   if (!s.IsOK()) {
+    storage_->ReOpenDB(false);  // Restore DB to writable
     return s;
   }
   s = storage_->ReOpenDB(false);  // Restore DB to writable

@@ -132,6 +132,7 @@ class CommandIngest : public Commander {
     column_family_name_ = args[2];
     files_str_ = args[3];
     server_id_ = args[4];
+    ingestion_mode_ = args[5];
     if (remote_or_local_ != "local" && remote_or_local_ != "remote") {
       return {Status::NotOK, "Failed cmd format, it should be like: ingest remote|local file1,file2,file3"};
     }
@@ -148,28 +149,31 @@ class CommandIngest : public Commander {
       std::vector<std::string> ingest_files;
       std::string file_str;
       for (auto file : files) {
-        ingest_files.push_back(svr->GetConfig()->global_migration_sync_dir + "/" +
-                               std::to_string(svr->GetConfig()->port) + "/" + file);
+        auto abs_path = file;
+        if (file[0] != '/') {
+          abs_path = svr->GetConfig()->global_migration_sync_dir + "/" + svr->cluster_->GetMyId() + "/" + file;
+        }
+        ingest_files.push_back(abs_path);
         file_str += ingest_files.back() + ",";
       }
       file_str.pop_back();
       LOG(INFO) << "Ingesting files: " << file_str;
 
-      auto t = GET_OR_RET(Util::CreateThread("master-repl", [svr, this, ingest_files] {
-        auto s = svr->cluster_->IngestFiles(this->column_family_name_, ingest_files);
-
-        if (!s.IsOK()) {
-          LOG(ERROR) << "Ingestion Error, reason: " << s.Msg();
-          return;
-        }
-      }));
-
-      //      t.detach();
-      t.join();
+      //      auto t = GET_OR_RET(Util::CreateThread("master-repl", [svr, this, ingest_files] {
+      //        auto s = svr->cluster_->IngestFiles(this->column_family_name_, ingest_files);
+      //
+      //        if (!s.IsOK()) {
+      //          LOG(ERROR) << "Ingestion Error, reason: " << s.Msg();
+      //          return;
+      //        }
+      //      }));
+      //
+      //      //      t.detach();
+      //      t.join();
 
       //      auto t = GET_OR_RET(svr->cluster_->IngestFiles(column_family_name_, ingest_files));
-
-      auto s = svr->cluster_->IngestFiles(column_family_name_, ingest_files);
+      bool fast_ingest = ingestion_mode_ == "fast";
+      auto s = svr->cluster_->IngestFiles(column_family_name_, ingest_files, fast_ingest);
       if (!s.IsOK()) {
         return s;
       }
@@ -194,7 +198,8 @@ class CommandIngest : public Commander {
       }
 
       LOG(INFO) << "Start Ingestion";
-      s = svr->cluster_->IngestFiles(column_family_name_, ingestion_candidates);
+      bool fast_ingest = ingestion_mode_ == "fast";
+      s = svr->cluster_->IngestFiles(column_family_name_, ingestion_candidates, fast_ingest);
 
       if (!s.IsOK()) {
         *output = Redis::SimpleString("Ingestion error");
@@ -212,6 +217,7 @@ class CommandIngest : public Commander {
   std::string files_str_;
   std::string column_family_name_;
   std::string server_id_;
+  std::string ingestion_mode_;
 };
 class CommandSSTFetch : public Commander {
  public:
@@ -460,7 +466,7 @@ class CommandClusterX : public Commander {
 
 REDIS_REGISTER_COMMANDS(MakeCmdAttr<CommandCluster>("cluster", -2, "cluster no-script", 0, 0, 0),
                         MakeCmdAttr<CommandClusterX>("clusterx", -2, "cluster no-script", 0, 0, 0),
-                        MakeCmdAttr<CommandIngest>("sst_ingest", 5, "cluster no-script", 0, 0, 0),
+                        MakeCmdAttr<CommandIngest>("sst_ingest", 6, "cluster no-script", 0, 0, 0),
                         MakeCmdAttr<CommandSSTFetch>("fetch_remote_sst", 2, "cluster no-script", 0, 0, 0), )
 
 }  // namespace Redis

@@ -28,6 +28,7 @@
 #include "cluster/redis_slot.h"
 #include "db_util.h"
 #include "rocksdb/convenience.h"
+#include "rocksdb/sst_file_reader.h"
 #include "server/redis_reply.h"
 #include "time_util.h"
 #include "types/redis_string.h"
@@ -421,17 +422,37 @@ Status Parser::CompactAndMerge() {
   std::set<std::string> result_sets;
 
   std::string source_ssts = "";
+  std::string meta_compact_results_str;
+  std::string subkey_compact_results_str;
+
+  start = Util::GetTimeStampMS();
+
   for (const auto &fn : meta_compact_results) {
     result_sets.emplace(fn);
+    meta_compact_results_str += Util::Split(fn, "/").back();
+    meta_compact_results_str += ',';
   }
+  end = Util::GetTimeStampMS();
+  std::cout << "Meta Filtered, time(ms): " << end - start << std::endl;
+
+  start = Util::GetTimeStampMS();
   for (const auto &fn : subkey_compact_results) {
     result_sets.emplace(fn);
+    std::cout << Util::Split(fn, "/").back();
+    subkey_compact_results_str += Util::Split(fn, "/").back();
+    subkey_compact_results_str += ',';
   }
+  end = Util::GetTimeStampMS();
+  std::cout << "Subkey Filtered, time(ms): " << end - start << std::endl;
 
   for (const auto &fn : result_sets) {
     source_ssts += (fn + " ");
   }
+  meta_compact_results_str.pop_back();
+  subkey_compact_results_str.pop_back();
 
+  std::cout << "File collected, Meta: [" << meta_compact_results_str << "], Subkey: [" << subkey_compact_results_str
+            << "]" << std::endl;
   std::string source_space = config_.src_db_dir;
   std::string target_space = config_.dst_db_dir;
 
@@ -463,6 +484,38 @@ Status Parser::CompactAndMerge() {
     return {Status::NotOK, "Failed copying files"};
   }
   std::cout << "File copy time (ms): " << end - start << std::endl;
+  // After copying the files, ingest to target server
+  std::string target_server_pre = "redis-cli";
+  target_server_pre += (" -h " + config_.dst_server_host);
+  target_server_pre += (" -p " + std::to_string(config_.dst_server_port));
+  // meta cf first
+  std::string ingestion_command = "CLUSTERX sst_ingest local";
+  ingestion_command += (" " + std::string(Engine::kMetadataColumnFamilyName));
+  ingestion_command += (" " + meta_compact_results_str);
+  ingestion_command += (" " + config_.src_server_host);
+  auto temp = target_server_pre + ingestion_command + " fast";
+  start = Util::GetTimeStampMS();
+  s = Util::CheckCmdOutput(temp, &worthy_result);
+  if (!s.IsOK()) {
+    return s;
+  }
+  end = Util::GetTimeStampMS();
+
+  std::cout << "Meta ingestion results: " << worthy_result << "; Time taken(ms): " << end - start << std::endl;
+  // sub key cf then
+  ingestion_command = "CLUSTERX sst_ingest local";
+  ingestion_command += (" " + std::string(Engine::kSubkeyColumnFamilyName));
+  ingestion_command += (" " + subkey_compact_results_str);
+  ingestion_command += (" " + config_.src_server_host);
+  temp = target_server_pre + ingestion_command + " fast";
+  start = Util::GetTimeStampMS();
+  s = Util::CheckCmdOutput(temp, &worthy_result);
+  if (!s.IsOK()) {
+    return s;
+  }
+  end = Util::GetTimeStampMS();
+  std::cout << "Subkey ingestion results: " << worthy_result << "; Time taken(ms): " << end - start << std::endl;
+
   //  }
 
   return Status::OK();
