@@ -55,7 +55,7 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   int i = 0;
   for (auto slot : migrate_slots_) {
     i++;
-    if (i > 100) break;
+    //    if (i > 100) break;
     slot_str += (std::to_string(slot) + ",");
   }
   slot_str.pop_back();
@@ -70,7 +70,7 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   s = Util::CheckCmdOutput(agent_cmd, &worthy_result);
   LOG(INFO) << "Migration agent returns with: " << worthy_result;
   if (!s.IsOK()) {
-    storage_->ReOpenDB(false);  // Restore DB to writable
+    auto res = storage_->ReOpenDB(false);  // Restore DB to writable
     return s;
   }
   s = storage_->ReOpenDB(false);  // Restore DB to writable
