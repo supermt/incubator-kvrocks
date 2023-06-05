@@ -753,6 +753,8 @@ bool Cluster::IsWriteForbiddenSlot(int slot) { return svr_->slot_migrate_->GetFo
 
 Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, const std::vector<std::string> &cmd_tokens,
                                 Redis::Connection *conn) {
+  if (!svr_->storage_->GetDB() || svr_->storage_->IsClosing())
+    return {Status::RedisExecErr, "TRYAGAIN DB pointer is empty"};
   std::vector<int> keys_indexes;
   auto s = Redis::GetKeysFromCommand(attributes->name, static_cast<int>(cmd_tokens.size()), &keys_indexes);
   // No keys

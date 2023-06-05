@@ -63,13 +63,6 @@ extern "C" void signal_handler(int sig) {
   if (hup_handler) hup_handler();
 }
 
-static void usage(const char *program) {
-  std::cout << program << " sync kvrocks to redis\n"
-            << "\t-s src_host:src_port@db_path,e.g., 127.0.0.1:40001@node1/asdf/\n"
-            << "\t-h help\n";
-  exit(0);
-}
-
 static void initGoogleLog(const MigrationAgent::Config *config) {
   FLAGS_minloglevel = config->loglevel;
   FLAGS_max_log_size = 100;
@@ -154,8 +147,10 @@ int main(int argc, char *argv[]) {
 
   if (!s.IsOK()) {
     std::cout << "Migration error!" << s.Msg();
+    src_sst_store.CloseDB();
     return -1;
   }
 
+  src_sst_store.CloseDB();
   return 0;
 }

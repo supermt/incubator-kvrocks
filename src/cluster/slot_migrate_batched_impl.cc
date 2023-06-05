@@ -25,6 +25,8 @@
 #include "event_util.h"
 #include "fmt/format.h"
 #include "io_util.h"
+#include "rocksdb/convenience.h"
+#include "rocksdb/db.h"
 #include "rocksdb/sst_file_reader.h"
 #include "slot_migrate.h"
 #include "storage/batch_extractor.h"
@@ -36,6 +38,8 @@
 #include "types/redis_string.h"
 
 Status CompactAndMergeMigrate::SendSnapshot() {
+  rocksdb::WaitForBackgroundWork(storage_->GetDB());
+
   auto src_config = svr_->GetConfig();
   std::string src_info = "127.0.0.1:" + std::to_string(src_config->port) + "@" + src_config->db_dir;
   std::string dst_info =
@@ -70,9 +74,11 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   s = Util::CheckCmdOutput(agent_cmd, &worthy_result);
   LOG(INFO) << "Migration agent returns with: " << worthy_result;
   if (!s.IsOK()) {
+    rocksdb::WaitForBackgroundWork(storage_->GetDB());
     auto res = storage_->ReOpenDB(false);  // Restore DB to writable
     return s;
   }
+  rocksdb::WaitForBackgroundWork(storage_->GetDB());
   s = storage_->ReOpenDB(false);  // Restore DB to writable
   if (!s.IsOK()) return s;
   return Status::OK();
