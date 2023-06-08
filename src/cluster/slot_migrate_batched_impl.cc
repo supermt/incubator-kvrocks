@@ -59,16 +59,16 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   int i = 0;
   for (auto slot : migrate_slots_) {
     i++;
-    //    if (i > 100) break;
+    if (i > 100) break;
     slot_str += (std::to_string(slot) + ",");
   }
   slot_str.pop_back();
   auto s = storage_->ReOpenDB(true);  // Set DB to readonly
   if (!s.IsOK()) return s;
   std::string agent_cmd = migration_agent_path + " --src_uri=" + src_uri + " --dst_uri=" + dst_uri +
-                          " --src_info=" + src_info + " --dst_info=" + dst_info + " --slot_str=" + slot_str +
-                          " --pull_method=" + pull_method + " --namespace_str=" + namespace_str +
-                          " --migration_user=" + migration_user;
+                          " --src_info=" + src_info + " --dst_info=" + dst_info + " --pull_method=" + pull_method +
+                          " --namespace_str=" + namespace_str + " --migration_user=" + migration_user +
+                          " --slot_str=" + slot_str;
   LOG(INFO) << "Try migrating using remote commands: " << agent_cmd;
   std::string worthy_result;
   s = Util::CheckCmdOutput(agent_cmd, &worthy_result);

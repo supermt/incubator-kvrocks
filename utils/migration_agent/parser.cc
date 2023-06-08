@@ -20,6 +20,7 @@
 
 #include "parser.h"
 
+#include <assert.h>
 #include <glog/logging.h>
 #include <rocksdb/write_batch.h>
 
@@ -308,7 +309,7 @@ Status Parser::DumpComplexKV(const Slice &ns_key, const Metadata &metadata, cons
   return Status::OK();
 }
 Status Parser::CompactAndMerge() {
-  std::vector<Slice> slot_prefix_list_;
+  std::vector<std::string> slot_prefix_list_;
   // Step 0. Fill namespace if empty
 
   auto db_ptr = storage_->GetDB();
@@ -332,6 +333,7 @@ Status Parser::CompactAndMerge() {
   for (int slot : slot_list_) {
     std::string prefix;
     ComposeSlotKeyPrefix(namespace_, slot, &prefix);
+    //    std::cout << prefix << "," << slot << "," << Slice(prefix).ToString(true);
     // After ComposeSlotKeyPrefix
     //  +-------------|---------|-------|--------|---|-------|-------+
     // |namespace_size|namespace|slot_id|, therefore we compare only the prefix key
@@ -340,7 +342,7 @@ Status Parser::CompactAndMerge() {
     // +-------------|---------|-------|--------|---|-------|-------+
     // |namespace_size|namespace|slot_id|key_size|key|version|subkey|
     // +-------------|---------|-------|--------|---|-------|-------+
-    slot_prefix_list_.emplace_back(prefix);
+    slot_prefix_list_.push_back(prefix);
   }
   // Therefore we need only the prefix key.
   // Step 2. Find related SSTs.
@@ -352,32 +354,49 @@ Status Parser::CompactAndMerge() {
   std::vector<std::string> meta_compact_sst_(0);
   std::vector<std::string> subkey_compact_sst_(0);
 
+  std::vector<std::string> meta_compact_results;
+  std::vector<std::string> subkey_compact_results;
+  auto options = storage_->GetDB()->GetOptions();
+  rocksdb::CompactionOptions co;
+  co.compression = options.compression;
+  co.max_subcompactions = options.max_background_compactions;
+
+  std::sort(slot_prefix_list_.begin(), slot_prefix_list_.end(),
+            [&](const Slice &a, const Slice &b) { return options.comparator->Compare(a, b) < 0; });
+
+  auto start = Util::GetTimeStampMS();
   std::cout << "Finding Meta" << std::endl;
   for (const auto &level_stat : metacf_ssts.levels) {
     for (const auto &sst_info : level_stat.files) {
-      for (Slice prefix : slot_prefix_list_) {
-        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
-            compare_with_prefix(sst_info.largestkey, prefix) > 0) {
+      for (auto prefix : slot_prefix_list_) {
+        if (compare_with_prefix(sst_info.smallestkey, prefix) <= 0 &&
+            compare_with_prefix(sst_info.largestkey, prefix) >= 0) {
           meta_compact_sst_.push_back(sst_info.name);
           break;  // no need for redundant inserting
         }
       }
     }
   }
-
-  std::cout << "Meta SST found:" << meta_compact_sst_.size() << std::endl;
-  std::cout << "Finding Subkey" << std::endl;
   for (const auto &level_stat : subkeycf_ssts.levels) {
     for (const auto &sst_info : level_stat.files) {
-      for (Slice prefix : slot_prefix_list_) {
-        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
-            compare_with_prefix(sst_info.largestkey, prefix) > 0) {
+      for (auto prefix : slot_prefix_list_) {
+        if (compare_with_prefix(sst_info.smallestkey, prefix) <= 0 &&
+            compare_with_prefix(sst_info.largestkey, prefix) >= 0) {
           subkey_compact_sst_.push_back(sst_info.name);
           break;
         }
       }
     }
   }
+
+  if (meta_compact_sst_.empty() || subkey_compact_sst_.empty()) {
+    std::cout << "Error: No SST can be found";
+    exit(-1);
+  }
+
+  std::cout << "Meta SST found:" << meta_compact_sst_.size() << std::endl;
+  std::cout << "Finding Subkey" << std::endl;
+
   std::cout << "Subkey SST found:" << subkey_compact_sst_.size() << std::endl;
   std::string sst_str;
   for (const auto &s : meta_compact_sst_) {
@@ -393,16 +412,12 @@ Status Parser::CompactAndMerge() {
   sst_str.pop_back();
 
   std::cout << "Subkey SSTs:[" << sst_str << "]" << std::endl;
+  auto end = Util::GetTimeStampMS();
+  std::cout << "SST collecting time(ms): " << end - start << std::endl;
 
   // Step 3. Compact data to remove dead entries
 
-  auto start = Util::GetTimeStampMS();
-  std::vector<std::string> meta_compact_results;
-  std::vector<std::string> subkey_compact_results;
-  auto options = storage_->GetDB()->GetOptions();
-  rocksdb::CompactionOptions co;
-  co.compression = options.compression;
-  co.max_subcompactions = options.max_background_compactions;
+  start = Util::GetTimeStampMS();
   auto compact_s = storage_->GetDB()->CompactFiles(co, meta_cf_handle_, meta_compact_sst_, options.num_levels - 1, -1,
                                                    &meta_compact_results);
   if (!compact_s.ok()) {
@@ -415,8 +430,10 @@ Status Parser::CompactAndMerge() {
     return {Status::NotOK, compact_s.ToString()};
   }
   db_ptr->ContinueBackgroundWork();
-  auto end = Util::GetTimeStampMS();
-  std::cout << "Compaction Time cost (ms): " << end - start << std::endl;
+  end = Util::GetTimeStampMS();
+  std::cout << "Compaction time(ms): " << end - start << std::endl;
+  std::cout << "# compaction input: " << meta_compact_sst_.size() + subkey_compact_sst_.size()
+            << " # compaction output: " << meta_compact_results.size() + subkey_compact_results.size() << std::endl;
 
   // Step 4. Copy the file to the remote, return
   std::set<std::string> result_sets;
@@ -428,8 +445,25 @@ Status Parser::CompactAndMerge() {
   start = Util::GetTimeStampMS();
 
   for (const auto &fn : meta_compact_results) {
-    result_sets.emplace(fn);
-    meta_compact_results_str += Util::Split(fn, "/").back();
+    rocksdb::SstFileReader reader(options);
+    rocksdb::SstFileWriter writer(rocksdb::EnvOptions(), options, subkey_cf_handle_);
+    reader.Open(fn);
+    auto read_it = reader.NewIterator(read_options);
+    auto out_put_name = fn + ".out";
+    writer.Open(out_put_name);
+    read_it->SeekToFirst();
+    std::string smallest_prefix = slot_prefix_list_.front();
+    std::string largest_prefix = slot_prefix_list_.back();
+    for (; read_it->Valid(); read_it->Next()) {
+      auto current_key = read_it->key();
+      if (compare_with_prefix(smallest_prefix, current_key.ToString()) <= 0 &&
+          compare_with_prefix(largest_prefix, current_key.ToString()) >= 0) {
+        writer.Put(read_it->key(), read_it->value());
+      }
+    }
+    writer.Finish();
+    result_sets.emplace(out_put_name);
+    meta_compact_results_str += Util::Split(out_put_name, "/").back();
     meta_compact_results_str += ',';
   }
   end = Util::GetTimeStampMS();
@@ -437,9 +471,25 @@ Status Parser::CompactAndMerge() {
 
   start = Util::GetTimeStampMS();
   for (const auto &fn : subkey_compact_results) {
-    result_sets.emplace(fn);
-    std::cout << Util::Split(fn, "/").back();
-    subkey_compact_results_str += Util::Split(fn, "/").back();
+    rocksdb::SstFileReader reader(options);
+    rocksdb::SstFileWriter writer(rocksdb::EnvOptions(), options, subkey_cf_handle_);
+    reader.Open(fn);
+    auto read_it = reader.NewIterator(read_options);
+    auto out_put_name = fn + ".out";
+    writer.Open(out_put_name);
+    read_it->SeekToFirst();
+    std::string smallest_prefix = slot_prefix_list_.front();
+    std::string largest_prefix = slot_prefix_list_.back();
+    for (; read_it->Valid(); read_it->Next()) {
+      auto current_key = read_it->key();
+      if (compare_with_prefix(smallest_prefix, current_key.ToString()) <= 0 &&
+          compare_with_prefix(largest_prefix, current_key.ToString()) >= 0) {
+        writer.Put(read_it->key(), read_it->value());
+      }
+    }
+    writer.Finish();
+    result_sets.emplace(out_put_name);
+    subkey_compact_results_str += Util::Split(out_put_name, "/").back();
     subkey_compact_results_str += ',';
   }
   end = Util::GetTimeStampMS();
@@ -467,22 +517,28 @@ Status Parser::CompactAndMerge() {
   }
 
   start = Util::GetTimeStampMS();
+  //  std::string migration_cmds = "ls " + source_ssts + " |xargs -n 1 basename| parallel -v -j8 rsync -raz --progress "
+  //  +
+  //                               source_space + "/{} " + config_.remote_username + "@" + config_.dst_server_host + ":"
+  //                               + target_space + "/{}";
   std::string migration_cmds = "ls " + source_ssts + " |xargs -n 1 basename| parallel -v -j8 rsync -raz --progress " +
                                source_space + "/{} " + config_.remote_username + "@" + config_.dst_server_host + ":" +
                                target_space + "/{}";
+
   //  for (auto migrate_candidate : result_sets) {
   //    std::string migration_cmds = "rsync -raz " + source_space + sst_str + config_.remote_username + "@" +
   //                                 config_.dst_server_host + ":" + target_space;
 
   end = Util::GetTimeStampMS();
-  std::cout << migration_cmds << std::endl;
+  std::cout << migration_cmds << " Time taken(ms)" << std::endl;
   worthy_result.clear();
   s = Util::CheckCmdOutput(migration_cmds, &worthy_result);
-  std::cout << worthy_result << std::endl;
+
   if (!s.IsOK()) {
     std::cout << "File transmission error!" << s.Msg();
-    return {Status::NotOK, "Failed copying files"};
+    return {Status::NotOK, "Failed copying files:" + s.Msg()};
   }
+  std::cout << worthy_result << std::endl;
   std::cout << "File copy time (ms): " << end - start << std::endl;
   // After copying the files, ingest to target server
   std::string target_server_pre = "redis-cli";
@@ -493,7 +549,8 @@ Status Parser::CompactAndMerge() {
   ingestion_command += (" " + std::string(Engine::kMetadataColumnFamilyName));
   ingestion_command += (" " + meta_compact_results_str);
   ingestion_command += (" " + config_.src_server_host);
-  auto temp = target_server_pre + ingestion_command + " fast";
+  auto temp = target_server_pre + ingestion_command + " slow";
+  std::cout << ingestion_command << std::endl;
   start = Util::GetTimeStampMS();
   s = Util::CheckCmdOutput(temp, &worthy_result);
   if (!s.IsOK()) {
@@ -507,16 +564,16 @@ Status Parser::CompactAndMerge() {
   ingestion_command += (" " + std::string(Engine::kSubkeyColumnFamilyName));
   ingestion_command += (" " + subkey_compact_results_str);
   ingestion_command += (" " + config_.src_server_host);
-  temp = target_server_pre + ingestion_command + " fast";
+  temp = target_server_pre + ingestion_command + " slow";
   start = Util::GetTimeStampMS();
+  std::cout << ingestion_command << std::endl;
   s = Util::CheckCmdOutput(temp, &worthy_result);
   if (!s.IsOK()) {
     return s;
   }
   end = Util::GetTimeStampMS();
   std::cout << "Subkey ingestion results: " << worthy_result << "; Time taken(ms): " << end - start << std::endl;
-
   //  }
-
+  latest_snapshot_.reset();
   return Status::OK();
 }

@@ -37,6 +37,7 @@ int StringMatchLen(const char *p, size_t plen, const char *s, size_t slen, int n
 std::string StringToHex(const std::string &input);
 std::vector<std::string> TokenizeRedisProtocol(const std::string &value);
 inline Status CheckCmdOutput(std::string &cmd, std::string *output) {
+  output->clear();
   FILE *pipe = popen(cmd.c_str(), "r");
   if (!pipe) return {Status::NotOK, "Can not Execute result"};
   char buffer[128];
