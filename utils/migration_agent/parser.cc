@@ -413,7 +413,7 @@ Status Parser::CompactAndMerge() {
 
   std::cout << "Subkey SSTs:[" << sst_str << "]" << std::endl;
   auto end = Util::GetTimeStampMS();
-  std::cout << "SST collecting time(ms): " << end - start << std::endl;
+  std::cout << "SST collected, Time taken(ms): " << end - start << std::endl;
 
   // Step 3. Compact data to remove dead entries
 
@@ -431,7 +431,7 @@ Status Parser::CompactAndMerge() {
   }
   db_ptr->ContinueBackgroundWork();
   end = Util::GetTimeStampMS();
-  std::cout << "Compaction time(ms): " << end - start << std::endl;
+  std::cout << "Compaction finished, Time taken(ms): " << end - start << std::endl;
   std::cout << "# compaction input: " << meta_compact_sst_.size() + subkey_compact_sst_.size()
             << " # compaction output: " << meta_compact_results.size() + subkey_compact_results.size() << std::endl;
 
@@ -467,7 +467,7 @@ Status Parser::CompactAndMerge() {
     meta_compact_results_str += ',';
   }
   end = Util::GetTimeStampMS();
-  std::cout << "Meta Filtered, time(ms): " << end - start << std::endl;
+  std::cout << "Meta Filtered, Time taken(ms): " << end - start << std::endl;
 
   start = Util::GetTimeStampMS();
   for (const auto &fn : subkey_compact_results) {
@@ -493,7 +493,7 @@ Status Parser::CompactAndMerge() {
     subkey_compact_results_str += ',';
   }
   end = Util::GetTimeStampMS();
-  std::cout << "Subkey Filtered, time(ms): " << end - start << std::endl;
+  std::cout << "Subkey Filtered, Time taken(ms): " << end - start << std::endl;
 
   for (const auto &fn : result_sets) {
     source_ssts += (fn + " ");
@@ -539,7 +539,7 @@ Status Parser::CompactAndMerge() {
     return {Status::NotOK, "Failed copying files:" + s.Msg()};
   }
   std::cout << worthy_result << std::endl;
-  std::cout << "File copy time (ms): " << end - start << std::endl;
+  std::cout << "File copied, Time taken(ms): " << end - start << std::endl;
   // After copying the files, ingest to target server
   std::string target_server_pre = "redis-cli";
   target_server_pre += (" -h " + config_.dst_server_host);
