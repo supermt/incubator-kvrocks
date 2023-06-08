@@ -59,7 +59,6 @@ Status CompactAndMergeMigrate::SendSnapshot() {
   int i = 0;
   for (auto slot : migrate_slots_) {
     i++;
-    if (i > 100) break;
     slot_str += (std::to_string(slot) + ",");
   }
   slot_str.pop_back();
@@ -112,93 +111,4 @@ Status CompactAndMergeMigrate::MigrateStart(Server *svr, const std::string &node
     job_cv_.notify_one();
   }
   return Status::OK();
-}
-void CompactAndMergeMigrate::PickSSTs() {
-  //  auto db_ptr = storage_->GetDB();
-  //  rocksdb::ReadOptions read_options;
-  //  storage_->SetReadOptions(read_options);
-  //
-  //  rocksdb::ColumnFamilyHandle *meta_cf_handle_;
-  //  rocksdb::ColumnFamilyHandle *subkey_cf_handle_;
-  //  meta_cf_handle_ = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
-  //  subkey_cf_handle_ = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
-  //
-  //  read_options.snapshot = this->slot_snapshot_;
-  //  auto iter = DBUtil::UniqueIterator(storage_, read_options, meta_cf_handle_);
-  //
-  //  if (namespace_ == "") {
-  //    iter->SeekToFirst();
-  //    std::string ns, user_key;
-  //    ExtractNamespaceKey(iter->key(), &ns, &user_key, true);
-  //    std::cout << ns.size() << "(bytes), ns data:" << ns << std::endl;
-  //    namespace_ = ns;
-  //  }
-  //
-  //  // Step 1. Compose prefix key
-  //  for (int slot : migrate_slots_) {
-  //    std::string prefix;
-  //    ComposeSlotKeyPrefix(namespace_, slot, &prefix);
-  //    // After ComposeSlotKeyPrefix
-  //    //  +-------------|---------|-------|--------|---|-------|-------+
-  //    // |namespace_size|namespace|slot_id|, therefore we compare only the prefix key
-  //
-  //    // This is prefix key: and the subkey is empty
-  //    // +-------------|---------|-------|--------|---|-------|-------+
-  //    // |namespace_size|namespace|slot_id|key_size|key|version|subkey|
-  //    // +-------------|---------|-------|--------|---|-------|-------+
-  //    slot_prefix_list_.emplace_back(prefix);
-  //  }
-  //  // Therefore we need only the prefix key.
-  //  // Step 2. Find related SSTs.
-  //  // Get level files
-  //  rocksdb::ColumnFamilyMetaData metacf_ssts;
-  //  rocksdb::ColumnFamilyMetaData subkeycf_ssts;
-  //  storage_->GetDB()->GetColumnFamilyMetaData(meta_cf_handle_, &metacf_ssts);
-  //  storage_->GetDB()->GetColumnFamilyMetaData(subkey_cf_handle_, &subkeycf_ssts);
-  //  std::vector<std::string> meta_compact_sst_(0);
-  //  std::vector<std::string> subkey_compact_sst_(0);
-  //
-  //  std::cout << "Finding Meta" << std::endl;
-  //  for (const auto &level_stat : metacf_ssts.levels) {
-  //    for (const auto &sst_info : level_stat.files) {
-  //      for (Slice prefix : slot_prefix_list_) {
-  //        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
-  //            compare_with_prefix(sst_info.largestkey, prefix) > 0) {
-  //          meta_compact_sst_.push_back(sst_info.name);
-  //          break;  // no need for redundant inserting
-  //        }
-  //      }
-  //    }
-  //  }
-  //
-  //  LOG(INFO) << "Meta SST found:" << meta_compact_sst_.size() << std::endl;
-  //  LOG(INFO) << "Finding Subkey" << std::endl;
-  //  for (const auto &level_stat : subkeycf_ssts.levels) {
-  //    for (const auto &sst_info : level_stat.files) {
-  //      for (Slice prefix : slot_prefix_list_) {
-  //        if (compare_with_prefix(sst_info.smallestkey, prefix) < 0 &&
-  //            compare_with_prefix(sst_info.largestkey, prefix) > 0) {
-  //          subkey_compact_sst_.push_back(sst_info.name);
-  //          break;
-  //        }
-  //      }
-  //    }
-  //  }
-  //  LOG(INFO) << "Subkey SST found:" << subkey_compact_sst_.size() << std::endl;
-  //  std::string sst_str;
-  //  for (const auto &s : meta_compact_sst_) {
-  //    sst_str += (s + ",");
-  //  }
-  //  sst_str.pop_back();
-  //
-  //  LOG(INFO) << "Meta SSTs:[" << sst_str << "]" << std::endl;
-  //  sst_str.clear();
-  //  for (const auto &s : subkey_compact_sst_) {
-  //    sst_str += (s + ",");
-  //  }
-  //  sst_str.pop_back();
-  //
-  //  LOG(INFO) << "Subkey SSTs:[" << sst_str << "]" << std::endl;
-  //
-  //  db_ptr->CompactFiles();
 }

@@ -253,7 +253,6 @@ class CompactAndMergeMigrate : public SlotMigrate {
   }
 
   int pull_method_;
-  void PickSSTs();
 
  private:
   std::vector<std::string> meta_ssts;
@@ -270,4 +269,8 @@ class LevelMigrate : public CompactAndMergeMigrate {
  public:
   explicit LevelMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
                         int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
+  Status SendSnapshot() override;
+
+  rocksdb::ColumnFamilyHandle *meta_cf_handle_;
+  rocksdb::ColumnFamilyHandle *subkey_cf_handle_;
 };

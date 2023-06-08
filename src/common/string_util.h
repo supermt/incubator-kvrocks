@@ -45,7 +45,8 @@ inline Status CheckCmdOutput(std::string &cmd, std::string *output) {
     std::string buffer_str = std::string(buffer);
     buffer_str = Util::ToLower(buffer_str);
     *output += buffer_str;
-    if (buffer_str.find("failed") != buffer_str.npos || buffer_str.find("error") != buffer_str.npos) {
+    if (buffer_str.find("failed") != buffer_str.npos || buffer_str.find("error") != buffer_str.npos ||
+        buffer_str.find("no such file") != buffer_str.npos) {
       pclose(pipe);
       return {Status::NotOK, buffer_str};
     }
