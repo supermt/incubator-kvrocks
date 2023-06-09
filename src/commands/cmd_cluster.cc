@@ -133,6 +133,11 @@ class CommandIngest : public Commander {
     files_str_ = args[3];
     server_id_ = args[4];
     ingestion_mode_ = args[5];
+    if (args.size() > 6) {
+      auto level_str = args[6];
+      auto temp = GET_OR_RET(ParseInt<int64_t>(level_str, 10));
+      target_level_ = temp;
+    }
     if (remote_or_local_ != "local" && remote_or_local_ != "remote") {
       return {Status::NotOK, "Failed cmd format, it should be like: ingest remote|local file1,file2,file3"};
     }
@@ -158,22 +163,8 @@ class CommandIngest : public Commander {
       }
       file_str.pop_back();
       LOG(INFO) << "Ingesting files: " << file_str;
-
-      //      auto t = GET_OR_RET(Util::CreateThread("master-repl", [svr, this, ingest_files] {
-      //        auto s = svr->cluster_->IngestFiles(this->column_family_name_, ingest_files);
-      //
-      //        if (!s.IsOK()) {
-      //          LOG(ERROR) << "Ingestion Error, reason: " << s.Msg();
-      //          return;
-      //        }
-      //      }));
-      //
-      //      //      t.detach();
-      //      t.join();
-
-      //      auto t = GET_OR_RET(svr->cluster_->IngestFiles(column_family_name_, ingest_files));
       bool fast_ingest = ingestion_mode_ == "fast";
-      auto s = svr->cluster_->IngestFiles(column_family_name_, ingest_files, fast_ingest);
+      auto s = svr->cluster_->IngestFiles(column_family_name_, ingest_files, fast_ingest, target_level_);
       if (!s.IsOK()) {
         return s;
       }
@@ -182,16 +173,16 @@ class CommandIngest : public Commander {
       return Status::OK();
     } else if (remote_or_local_ == "remote") {
       LOG(INFO) << "Fetching data from remote server: " << server_id_;
-      auto start = Util::GetTimeStampMS();
+      auto start = Util::GetTimeStampUS();
       Status s = Status::OK();
       s = svr->cluster_->FetchFileFromRemote(server_id_, files, svr->GetConfig()->migration_sync_dir);
-      auto end = Util::GetTimeStampMS();
+      auto end = Util::GetTimeStampUS();
       if (!s.IsOK()) {
         LOG(ERROR) << "Fetching data error " << s.Msg();
         *output = Redis::SimpleString("Fetch error");
         return s;
       }
-      LOG(INFO) << "Fetched all SST, time taken(ms): " << end - start;
+      LOG(INFO) << "Fetched all SST, Time taken(us): " << end - start;
       std::vector<std::string> ingestion_candidates;
       for (auto file : files) {
         ingestion_candidates.push_back(svr->GetConfig()->migration_sync_dir + "/" + file);
@@ -218,6 +209,7 @@ class CommandIngest : public Commander {
   std::string column_family_name_;
   std::string server_id_;
   std::string ingestion_mode_;
+  int target_level_;
 };
 class CommandSSTFetch : public Commander {
  public:

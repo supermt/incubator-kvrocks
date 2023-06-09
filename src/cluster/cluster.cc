@@ -949,18 +949,18 @@ Status Cluster::IngestFiles(const std::string &column_family, const std::vector<
   }
 
   //  ing_options.move_files = true;
-  auto start_ms = Util::GetTimeStampMS();
+  auto start = Util::GetTimeStampUS();
   // Read and Extract Records
 
   auto rocks_s = svr_->storage_->GetDB()->IngestExternalFile(cfh, files, ifo);
-  auto end_ms = Util::GetTimeStampMS();
+  auto end = Util::GetTimeStampUS();
 
   if (!rocks_s.ok()) {
-    LOG(INFO) << "Ingestion error, time(ms) take: " << end_ms - start_ms;
+    LOG(INFO) << "Ingestion error, Time taken(us): " << end - start;
     //    return Status::OK();
     return {Status::NotOK, "Ingestion error" + rocks_s.ToString()};
   }
-  LOG(INFO) << "Ingestion completed, time(ms) take: " << end_ms - start_ms;
+  LOG(INFO) << "Ingestion completed, Time taken(us): " << end - start;
   return Status::OK();
 }
 int Cluster::OpenDataFileForMigrate(const std::string &remote_file_name, uint64_t *file_size) {
@@ -1007,7 +1007,7 @@ Status Cluster::fetchFiles(int sock_fd, const std::string &dir, const std::vecto
 
   UniqueEvbuf evbuf;
   for (const auto &file : files) {
-    auto start = Util::GetTimeStampMS();
+    auto start = Util::GetTimeStampUS();
     LOG(INFO) << "[fetch] Start to fetch file " << file;
     s = fetchFile(sock_fd, evbuf.get(), dir, file, fn);
     if (!s.IsOK()) {
@@ -1015,8 +1015,8 @@ Status Cluster::fetchFiles(int sock_fd, const std::string &dir, const std::vecto
       LOG(WARNING) << "[fetch] Fail to fetch file " << file << ", err: " << s.Msg();
       break;
     }
-    auto end = Util::GetTimeStampMS();
-    LOG(INFO) << "[fetch] Succeed fetching file " << file << ", time taken(ms): " << end - start;
+    auto end = Util::GetTimeStampUS();
+    LOG(INFO) << "[fetch] Succeed fetching file " << file << ", Time taken(us): " << end - start;
     // Just for tests
     if (svr_->GetConfig()->fullsync_recv_file_delay) {
       sleep(svr_->GetConfig()->fullsync_recv_file_delay);

@@ -198,6 +198,7 @@ void SlotMigrate::RunStateMachine() {
         auto s = SendSnapshot();
         if (s.IsOK()) {
           state_machine_ = kSlotMigrateWal;
+          LOG(INFO) << "Finish sending snapshot, only count cmd transfer time, Time taken(us): " << send_cmd_time;
         } else {
           LOG(ERROR) << "[migrate] Failed to send snapshot of slot " << slot_info << ". Error: " << s.Msg();
           state_machine_ = kSlotMigrateFailed;
@@ -897,6 +898,7 @@ Status SlotMigrate::MigrateBitmapKey(const InternalKey &inkey, std::unique_ptr<r
 }
 
 Status SlotMigrate::SendCmdsPipelineIfNeed(std::string *commands, bool need) {
+  auto start = Util::GetTimeStampUS();
   if (stop_migrate_) {
     return {Status::NotOK, errMigrationTaskCanceled};
   }
@@ -928,7 +930,8 @@ Status SlotMigrate::SendCmdsPipelineIfNeed(std::string *commands, bool need) {
   // Clear commands and running pipeline
   commands->clear();
   current_pipeline_size_ = 0;
-
+  auto end = Util::GetTimeStampUS();
+  send_cmd_time += (end - start);
   return Status::OK();
 }
 
@@ -1074,15 +1077,15 @@ Status SlotMigrate::SyncWalBeforeForbidSlot() {
 
 Status SlotMigrate::SyncWalAfterForbidSlot() {
   // Block server to set forbidden slot
-  uint64_t during = Util::GetTimeStampMS();
+  uint64_t during = Util::GetTimeStampUS();
   {
     auto exclusivity = svr_->WorkExclusivityGuard();
     SetForbiddenSlot(migrate_slot_);
   }
 
   wal_increment_seq_ = storage_->GetDB()->GetLatestSequenceNumber();
-  during = Util::GetTimeStampMS() - during;
-  LOG(INFO) << "[migrate] To set forbidden slot, server was blocked for " << during << "ms";
+  during = Util::GetTimeStampUS() - during;
+  LOG(INFO) << "[migrate] To set forbidden slot, server was blocked for " << during << "us";
 
   // No incremental data
   if (wal_increment_seq_ <= wal_begin_seq_) return Status::OK();

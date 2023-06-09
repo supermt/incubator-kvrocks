@@ -364,7 +364,7 @@ Status Parser::CompactAndMerge() {
   std::sort(slot_prefix_list_.begin(), slot_prefix_list_.end(),
             [&](const Slice &a, const Slice &b) { return options.comparator->Compare(a, b) < 0; });
 
-  auto start = Util::GetTimeStampMS();
+  auto start = Util::GetTimeStampUS();
   std::cout << "Finding Meta" << std::endl;
   for (const auto &level_stat : metacf_ssts.levels) {
     for (const auto &sst_info : level_stat.files) {
@@ -412,12 +412,12 @@ Status Parser::CompactAndMerge() {
   sst_str.pop_back();
 
   std::cout << "Subkey SSTs:[" << sst_str << "]" << std::endl;
-  auto end = Util::GetTimeStampMS();
-  std::cout << "SST collected, Time taken(ms): " << end - start << std::endl;
+  auto end = Util::GetTimeStampUS();
+  std::cout << "SST collected, Time taken(us): " << end - start << std::endl;
 
   // Step 3. Compact data to remove dead entries
 
-  start = Util::GetTimeStampMS();
+  start = Util::GetTimeStampUS();
   auto compact_s = storage_->GetDB()->CompactFiles(co, meta_cf_handle_, meta_compact_sst_, options.num_levels - 1, -1,
                                                    &meta_compact_results);
   if (!compact_s.ok()) {
@@ -430,8 +430,8 @@ Status Parser::CompactAndMerge() {
     return {Status::NotOK, compact_s.ToString()};
   }
   db_ptr->ContinueBackgroundWork();
-  end = Util::GetTimeStampMS();
-  std::cout << "Compaction finished, Time taken(ms): " << end - start << std::endl;
+  end = Util::GetTimeStampUS();
+  std::cout << "Compaction finished, Time taken(us): " << end - start << std::endl;
   std::cout << "# compaction input: " << meta_compact_sst_.size() + subkey_compact_sst_.size()
             << " # compaction output: " << meta_compact_results.size() + subkey_compact_results.size() << std::endl;
 
@@ -442,7 +442,7 @@ Status Parser::CompactAndMerge() {
   std::string meta_compact_results_str;
   std::string subkey_compact_results_str;
 
-  start = Util::GetTimeStampMS();
+  start = Util::GetTimeStampUS();
 
   for (const auto &fn : meta_compact_results) {
     rocksdb::SstFileReader reader(options);
@@ -466,10 +466,10 @@ Status Parser::CompactAndMerge() {
     meta_compact_results_str += Util::Split(out_put_name, "/").back();
     meta_compact_results_str += ',';
   }
-  end = Util::GetTimeStampMS();
-  std::cout << "Meta Filtered, Time taken(ms): " << end - start << std::endl;
+  end = Util::GetTimeStampUS();
+  std::cout << "Meta Filtered, Time taken(us): " << end - start << std::endl;
 
-  start = Util::GetTimeStampMS();
+  start = Util::GetTimeStampUS();
   for (const auto &fn : subkey_compact_results) {
     rocksdb::SstFileReader reader(options);
     rocksdb::SstFileWriter writer(rocksdb::EnvOptions(), options, subkey_cf_handle_);
@@ -492,8 +492,8 @@ Status Parser::CompactAndMerge() {
     subkey_compact_results_str += Util::Split(out_put_name, "/").back();
     subkey_compact_results_str += ',';
   }
-  end = Util::GetTimeStampMS();
-  std::cout << "Subkey Filtered, Time taken(ms): " << end - start << std::endl;
+  end = Util::GetTimeStampUS();
+  std::cout << "Subkey Filtered, Time taken(us): " << end - start << std::endl;
 
   for (const auto &fn : result_sets) {
     source_ssts += (fn + " ");
@@ -516,7 +516,7 @@ Status Parser::CompactAndMerge() {
     return {Status::NotOK, "Failed creating directory"};
   }
 
-  start = Util::GetTimeStampMS();
+  start = Util::GetTimeStampUS();
   //  std::string migration_cmds = "ls " + source_ssts + " |xargs -n 1 basename| parallel -v -j8 rsync -raz --progress "
   //  +
   //                               source_space + "/{} " + config_.remote_username + "@" + config_.dst_server_host + ":"
@@ -529,8 +529,8 @@ Status Parser::CompactAndMerge() {
   //    std::string migration_cmds = "rsync -raz " + source_space + sst_str + config_.remote_username + "@" +
   //                                 config_.dst_server_host + ":" + target_space;
 
-  end = Util::GetTimeStampMS();
-  std::cout << migration_cmds << " Time taken(ms)" << std::endl;
+  end = Util::GetTimeStampUS();
+  std::cout << migration_cmds << " Time taken(us)" << std::endl;
   worthy_result.clear();
   s = Util::CheckCmdOutput(migration_cmds, &worthy_result);
 
@@ -539,7 +539,7 @@ Status Parser::CompactAndMerge() {
     return {Status::NotOK, "Failed copying files:" + s.Msg()};
   }
   std::cout << worthy_result << std::endl;
-  std::cout << "File copied, Time taken(ms): " << end - start << std::endl;
+  std::cout << "File copied, Time taken(us): " << end - start << std::endl;
   // After copying the files, ingest to target server
   std::string target_server_pre = "redis-cli";
   target_server_pre += (" -h " + config_.dst_server_host);
@@ -551,28 +551,28 @@ Status Parser::CompactAndMerge() {
   ingestion_command += (" " + config_.src_server_host);
   auto temp = target_server_pre + ingestion_command + " slow";
   std::cout << ingestion_command << std::endl;
-  start = Util::GetTimeStampMS();
+  start = Util::GetTimeStampUS();
   s = Util::CheckCmdOutput(temp, &worthy_result);
   if (!s.IsOK()) {
     return s;
   }
-  end = Util::GetTimeStampMS();
+  end = Util::GetTimeStampUS();
 
-  std::cout << "Meta ingestion results: " << worthy_result << "; Time taken(ms): " << end - start << std::endl;
+  std::cout << "Meta ingestion results: " << worthy_result << "; Time taken(us): " << end - start << std::endl;
   // sub key cf then
   ingestion_command = "CLUSTERX sst_ingest local";
   ingestion_command += (" " + std::string(Engine::kSubkeyColumnFamilyName));
   ingestion_command += (" " + subkey_compact_results_str);
   ingestion_command += (" " + config_.src_server_host);
   temp = target_server_pre + ingestion_command + " slow";
-  start = Util::GetTimeStampMS();
+  start = Util::GetTimeStampUS();
   std::cout << ingestion_command << std::endl;
   s = Util::CheckCmdOutput(temp, &worthy_result);
   if (!s.IsOK()) {
     return s;
   }
-  end = Util::GetTimeStampMS();
-  std::cout << "Subkey ingestion results: " << worthy_result << "; Time taken(ms): " << end - start << std::endl;
+  end = Util::GetTimeStampUS();
+  std::cout << "Subkey ingestion results: " << worthy_result << "; Time taken(us): " << end - start << std::endl;
   //  }
   latest_snapshot_.reset();
   return Status::OK();

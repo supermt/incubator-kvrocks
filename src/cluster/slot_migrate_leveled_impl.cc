@@ -69,12 +69,17 @@ Status LevelMigrate::SendSnapshot() {
   storage_->GetDB()->GetColumnFamilyMetaData(subkey_cf_handle_, &subkeycf_ssts);
   std::vector<std::string> meta_compact_sst_(0);
   std::vector<std::string> subkey_compact_sst_(0);
-  auto start = Util::GetTimeStampMS();
+  std::map<int, std::vector<std::string>> meta_level_files;
+  std::map<int, std::vector<std::string>> subkey_level_files;
+
+  auto start = Util::GetTimeStampUS();
   for (const auto &level_stat : metacf_ssts.levels) {
+    meta_level_files[level_stat.level] = {};
     for (const auto &sst_info : level_stat.files) {
       for (auto prefix : slot_prefix_list_) {
         if (compare_with_prefix(sst_info.smallestkey, prefix) <= 0 &&
             compare_with_prefix(sst_info.largestkey, prefix) >= 0) {
+          meta_level_files[level_stat.level].push_back(Util::Split(sst_info.name, "/").back());
           meta_compact_sst_.push_back(sst_info.name);
           break;  // no need for redundant inserting
         }
@@ -83,10 +88,12 @@ Status LevelMigrate::SendSnapshot() {
   }
 
   for (const auto &level_stat : subkeycf_ssts.levels) {
+    subkey_level_files[level_stat.level] = {};
     for (const auto &sst_info : level_stat.files) {
       for (auto prefix : slot_prefix_list_) {
         if (compare_with_prefix(sst_info.smallestkey, prefix) <= 0 &&
             compare_with_prefix(sst_info.largestkey, prefix) >= 0) {
+          subkey_level_files[level_stat.level].push_back(Util::Split(sst_info.name, "/").back());
           subkey_compact_sst_.push_back(sst_info.name);
           break;
         }
@@ -115,11 +122,11 @@ Status LevelMigrate::SendSnapshot() {
     result_ssts.push_back(s);
   }
   sub_sst_str.pop_back();
-  auto end = Util::GetTimeStampMS();
+  auto end = Util::GetTimeStampUS();
 
   LOG(INFO) << "Meta SSTs:[" << meta_sst_str << "]";
   LOG(INFO) << "Subkey SSTs:[" << sub_sst_str << "]" << std::endl;
-  LOG(INFO) << "SST collected, Time taken(ms): " << end - start << std::endl;
+  LOG(INFO) << "SST collected, Time taken(us): " << end - start << std::endl;
 
   // copy files to remote server
   auto remote_username = svr_->GetConfig()->migration_user;
@@ -150,6 +157,61 @@ Status LevelMigrate::SendSnapshot() {
   if (!s.IsOK()) {
     return {Status::NotOK, "Failed on copy file: " + file_copy_output};
   }
+
+  // Start ingestion
+  std::string ingest_output;
+  std::string target_server_pre = "redis-cli";
+  target_server_pre += (" -h " + dst_ip_);
+  target_server_pre += (" -p " + std::to_string(dst_port_));
+
+  start = Util::GetTimeStampUS();
+  for (const auto &meta_level : meta_level_files) {
+    std::string meta_file_str;
+    if (meta_level.second.empty()) {
+      continue;
+    }
+    for (auto file : meta_level.second) {
+      meta_file_str += (file + ",");
+    }
+    meta_file_str.pop_back();
+
+    std::string ingestion_command = "CLUSTERX sst_ingest local";
+    ingestion_command += (" " + std::string(Engine::kMetadataColumnFamilyName));
+    ingestion_command += (" " + meta_file_str);
+    ingestion_command += (" " + dst_node_);
+    auto level_ingest_cmd = target_server_pre + ingestion_command + " fast " + std::to_string(meta_level.first);
+    LOG(INFO) << level_ingest_cmd;
+    s = Util::CheckCmdOutput(level_ingest_cmd, &ingest_output);
+    if (!s.IsOK()) {
+      return s;
+    }
+  }
+  for (const auto &subkey_level : subkey_level_files) {
+    std::string subkey_file_str;
+    if (subkey_level.second.empty()) {
+      continue;
+    }
+
+    for (auto file : subkey_level.second) {
+      subkey_file_str += (file + ",");
+    }
+    subkey_file_str.pop_back();
+
+    std::string ingestion_command = "CLUSTERX sst_ingest local";
+    ingestion_command += (" " + std::string(Engine::kMetadataColumnFamilyName));
+    ingestion_command += (" " + subkey_file_str);
+    ingestion_command += (" " + dst_node_);
+    auto level_ingest_cmd = target_server_pre + ingestion_command + " fast " + std::to_string(subkey_level.first);
+    LOG(INFO) << ingestion_command;
+    s = Util::CheckCmdOutput(level_ingest_cmd, &ingestion_command);
+    if (!s.IsOK()) {
+      return s;
+    }
+  }
+
+  end = Util::GetTimeStampUS();
+
+  LOG(INFO) << "Level ingestion finished, Time taken(us)" << end - start;
 
   storage_->GetDB()->ContinueBackgroundWork();
   return Status::OK();
