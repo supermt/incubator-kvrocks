@@ -211,15 +211,13 @@ void SlotMigrate::RunStateMachine() {
             migrate_slot_ = slot;
             auto s = SyncWal();
             if (s.IsOK()) {
-              LOG(INFO) << "[migrate] Succeed to sync WAL for a slot " << slot_info;
-              state_machine_ = kSlotMigrateSuccess;
+              LOG(INFO) << "[migrate] Succeed to sync WAL for a slot " << slot;
             } else {
-              LOG(ERROR) << "[migrate] Failed to sync WAL for a slot " << slot_info << ". Error: " << s.Msg();
+              LOG(ERROR) << "[migrate] Failed to sync WAL for a slot " << slot << ". Error: " << s.Msg();
               state_machine_ = kSlotMigrateFailed;
+              break;
             }
           }
-          // Skip WAL
-          LOG(INFO) << "Skip WAL migration, data has been compacted";
           state_machine_ = kSlotMigrateSuccess;
         } else {
           auto s = SyncWal();

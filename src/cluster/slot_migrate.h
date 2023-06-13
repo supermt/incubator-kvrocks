@@ -112,7 +112,7 @@ class SlotMigrate : public Redis::Database {
   ~SlotMigrate();
   virtual std::string GetName() { return "seek-and-insert"; }
   Status CreateMigrateHandleThread();
-  virtual void Loop();
+  void Loop();
   Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int slot,
                       int speed, int pipeline_size, int seq_gap, bool join = false);
   virtual Status SetMigrationSlots(std::vector<int> &target_slots);
@@ -224,12 +224,13 @@ class ParallelSlotMigrate : public SlotMigrate {
  public:
   explicit ParallelSlotMigrate(Server *svr, int migration_speed = kDefaultMigrationSpeed,
                                int pipeline_size_limit = kDefaultPipelineSizeLimit, int seq_gap = kDefaultSeqGapLimit);
-  void Loop() override;
-  void Clean() override;
+
   virtual std::string GetName() { return "parallel seek-and-insert"; }
   Status MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip, int dst_port, int seq_gap,
                       bool join) override;
   Status SetMigrationSlots(std::vector<int> &target_slots) override;
+
+  Status SendSnapshot() override;
 
  private:
   std::map<int, std::vector<int>> slots_for_thread_;

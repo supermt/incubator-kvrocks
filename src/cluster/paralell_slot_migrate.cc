@@ -40,40 +40,18 @@ ParallelSlotMigrate::ParallelSlotMigrate(Server *svr, int migration_speed, int p
     : SlotMigrate(svr, migration_speed, pipeline_size_limit, seq_gap) {
   this->batched_ = true;
 }
-void ParallelSlotMigrate::Loop() {
-  while (true) {
-    std::unique_lock<std::mutex> ul(job_mutex_);
-    while (!IsTerminated() && !slot_job_) {
-      job_cv_.wait(ul);
+
+Status ParallelSlotMigrate::SendSnapshot() {
+  Status s;
+  for (auto slot : migrate_slots_) {
+    slot_job_->migrate_slot_ = slot;
+    migrate_slot_ = slot;
+    s = SlotMigrate::SendSnapshot();
+    if (!s.IsOK()) {
+      return s;
     }
-    ul.unlock();
-
-    if (IsTerminated()) {
-      Clean();
-      return;
-    }
-
-    LOG(INFO) << "[migrate] migrate_slot: " << slot_job_->migrate_slot_ << ", dst_ip: " << slot_job_->dst_ip_
-              << ", dst_port: " << slot_job_->dst_port_ << ", speed_limit: " << slot_job_->speed_limit_
-              << ", pipeline_size_limit: " << slot_job_->pipeline_size_;
-
-    dst_ip_ = slot_job_->dst_ip_;
-    dst_port_ = slot_job_->dst_port_;
-    migration_speed_ = slot_job_->speed_limit_;
-    pipeline_size_limit_ = slot_job_->pipeline_size_;
-    seq_gap_limit_ = slot_job_->seq_gap_;
-
-    for (int slot : slot_job_->slots_) {
-      slot_job_->migrate_slot_ = slot;
-      migrate_slot_ = (int16_t)slot;
-      RunStateMachine();
-    }
-
-    std::lock_guard<std::mutex> guard(job_mutex_);
-    slot_job_->migrate_slot_ = -1;
-    slot_job_.reset();
-    //    svr_->migration_pool_->enqueue(&SlotMigrate::RunStateMachine, this);
   }
+  return Status::OK();
 }
 Status ParallelSlotMigrate::MigrateStart(Server *svr, const std::string &node_id, const std::string &dst_ip,
                                          int dst_port, int seq_gap, bool join) {
@@ -99,17 +77,4 @@ Status ParallelSlotMigrate::SetMigrationSlots(std::vector<int> &target_slots) {
   migrate_slots_.clear();
   migrate_slots_.insert(migrate_slots_.end(), target_slots.begin(), target_slots.end());
   return Status::OK();
-}
-void ParallelSlotMigrate::Clean() {
-  LOG(INFO) << "[" << GetName() << "] Clean resources of migrating slot " << slot_job_->migrate_slot_;
-  if (slot_snapshot_) {
-    storage_->GetDB()->ReleaseSnapshot(slot_snapshot_);
-    slot_snapshot_ = nullptr;
-  }
-
-  state_machine_ = kSlotMigrateNone;
-  current_pipeline_size_ = 0;
-  wal_begin_seq_ = 0;
-  wal_increment_seq_ = 0;
-  SetMigrateStopFlag(false);
 }
