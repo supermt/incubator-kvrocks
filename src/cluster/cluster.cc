@@ -113,6 +113,18 @@ Status Cluster::SetNodeId(const std::string &node_id) {
 // This is different with CLUSTERX SETNODES commands because it uses new version
 // topology to cover current version, it allows kvrocks nodes lost some topology
 // updates since of network failure, it is state instead of operation.
+
+Status Cluster::SetSlots(std::vector<int> &slots, const std::string &node_id, int64_t version) {
+  Status s;
+  for (int slot : slots) {
+    s = SetSlot(slot, node_id, version++);
+    if (!s.IsOK()) {
+      return s;
+    }
+  }
+  return Status::OK();
+}
+
 Status Cluster::SetSlot(int slot, const std::string &node_id, int64_t new_version) {
   // Parameters check
   if (new_version <= 0 || new_version != version_ + 1) {
