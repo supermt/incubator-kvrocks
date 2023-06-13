@@ -298,11 +298,9 @@ class CommandClusterX : public Commander {
         std::string slot_str = args[2];
         if (slot_str.back() == ',') slot_str.pop_back();
         auto slot_list = Util::Split(slot_str, ",");
-        std::cout << slot_list.size() << std::endl;
         if (slot_list.size() > 1) {
           slot_ = -1;
           for (auto slot : slot_list) {
-            std::cout << slot << std::endl;
             int temp = GET_OR_RET(ParseInt<int64_t>(slot, 10));
             slots_.push_back(temp);
           }
@@ -425,7 +423,7 @@ class CommandClusterX : public Commander {
       *output = Redis::BulkString(std::to_string(v));
     } else if (subcommand_ == "migrate") {
       Status s;
-      if (svr->GetConfig()->migrate_method < kSeekAndIngestion) {
+      if (!svr->slot_migrate_->IsBatched()) {
         s = svr->cluster_->MigrateSlot(static_cast<int>(slot_), dst_node_id_);
       } else {
         s = svr->cluster_->MigrateSlots(slots_, dst_node_id_);

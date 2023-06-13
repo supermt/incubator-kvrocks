@@ -841,6 +841,7 @@ Status Cluster::MigrateSlots(std::vector<int> &slots, const std::string &dst_nod
     case kSeekAndInsert: {
       return {Status::NotOK, "This migration method does not support multi-slot migration"};
     }
+    case kSeekAndInsertBatched:
     case kSeekAndIngestion:
     case kCompactAndMerge:
     case kLevelMigration: {
@@ -972,7 +973,7 @@ Status Cluster::ValidateMigrateSlot(int slot, const std::string &dst_node_id) {
   }
 
   if (!IsValidSlot(slot)) {
-    return {Status::NotOK, errSlotOutOfRange};
+    return {Status::NotOK, "slot: " + std::to_string(slot) + " is out of range"};
   }
 
   if (slots_nodes_[slot] != myself_) {

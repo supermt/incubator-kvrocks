@@ -48,9 +48,10 @@ constexpr const char *TLS_AUTH_CLIENTS_OPTIONAL = "optional";
 
 enum MigrationStrategy : int {
   kSeekAndInsert = 0,
-  kSeekAndIngestion = 1,
-  kCompactAndMerge = 2,
-  kLevelMigration = 3,
+  kSeekAndInsertBatched = 1,
+  kSeekAndIngestion = 2,
+  kCompactAndMerge = 3,
+  kLevelMigration = 4,
   kInvalidMigration
 };
 

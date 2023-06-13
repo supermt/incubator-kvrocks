@@ -38,7 +38,7 @@
 
 ParallelSlotMigrate::ParallelSlotMigrate(Server *svr, int migration_speed, int pipeline_size_limit, int seq_gap)
     : SlotMigrate(svr, migration_speed, pipeline_size_limit, seq_gap) {
-  this->batched_ = false;
+  this->batched_ = true;
 }
 void ParallelSlotMigrate::Loop() {
   while (true) {
