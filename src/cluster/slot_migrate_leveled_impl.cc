@@ -43,7 +43,10 @@ LevelMigrate::LevelMigrate(Server *svr, int migration_speed, int pipeline_size_l
 }
 
 Status LevelMigrate::SendSnapshot() {
+  auto start = Util::GetTimeStampUS();
   rocksdb::WaitForBackgroundWork(storage_->GetDB());  // wait for current compaction to finish
+  auto end = Util::GetTimeStampUS();
+  LOG(INFO) << "Wait BG flush job for: " << end - start << " us" << std::endl;
   storage_->GetDB()->PauseBackgroundWork();
   auto src_config = svr_->GetConfig();
   std::string src_info = "127.0.0.1:" + std::to_string(src_config->port) + "@" + src_config->db_dir;
@@ -72,7 +75,7 @@ Status LevelMigrate::SendSnapshot() {
   std::map<int, std::vector<std::string>> meta_level_files;
   std::map<int, std::vector<std::string>> subkey_level_files;
 
-  auto start = Util::GetTimeStampUS();
+  start = Util::GetTimeStampUS();
   for (const auto &level_stat : metacf_ssts.levels) {
     meta_level_files[level_stat.level] = {};
     for (const auto &sst_info : level_stat.files) {
@@ -122,7 +125,7 @@ Status LevelMigrate::SendSnapshot() {
     result_ssts.push_back(s);
   }
   sub_sst_str.pop_back();
-  auto end = Util::GetTimeStampUS();
+  end = Util::GetTimeStampUS();
 
   LOG(INFO) << "Meta SSTs:[" << meta_sst_str << "]";
   LOG(INFO) << "Subkey SSTs:[" << sub_sst_str << "]" << std::endl;

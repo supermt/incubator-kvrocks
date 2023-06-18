@@ -41,12 +41,12 @@ bool SlotImport::Start(int fd, int slot) {
   }
 
   // Clean slot data first
-  auto s = ClearKeysOfSlot(namespace_, slot);
-  if (!s.ok()) {
-    LOG(INFO) << "[import] Failed to clear keys of slot " << slot << "current status is importing 'START'"
-              << ", Err: " << s.ToString();
-    return false;
-  }
+  //  auto s = ClearKeysOfSlot(namespace_, slot);
+  //  if (!s.ok()) {
+  //    LOG(INFO) << "[import] Failed to clear keys of slot " << slot << "current status is importing 'START'"
+  //              << ", Err: " << s.ToString();
+  //    return false;
+  //  }
 
   import_status_ = kImportStart;
   import_slot_ = slot;
@@ -81,11 +81,12 @@ bool SlotImport::Fail(int slot) {
   }
 
   // Clean imported slot data
-  auto s = ClearKeysOfSlot(namespace_, slot);
-  if (!s.ok()) {
-    LOG(INFO) << "[import] Failed to clear keys of slot " << slot << ", current importing status is importing 'FAIL'"
-              << ", Err: " << s.ToString();
-  }
+  //  auto s = ClearKeysOfSlot(namespace_, slot);
+  //  if (!s.ok()) {
+  //    LOG(INFO) << "[import] Failed to clear keys of slot " << slot << ", current importing status is importing
+  //    'FAIL'"
+  //              << ", Err: " << s.ToString();
+  //  }
 
   import_status_ = kImportFailed;
   import_fd_ = -1;
@@ -106,14 +107,14 @@ void SlotImport::StopForLinkError(int fd) {
   // 4. ClearKeysOfSlot can clear data although server is a slave, because ClearKeysOfSlot
   //    deletes data in rocksdb directly. Therefor, it is necessary to avoid clearing data gotten
   //    from new master.
-  if (!svr_->IsSlave()) {
-    // Clean imported slot data
-    auto s = ClearKeysOfSlot(namespace_, import_slot_);
-    if (!s.ok()) {
-      LOG(WARNING) << "[import] Failed to clear keys of slot " << import_slot_ << " Current status is link error"
-                   << ", Err: " << s.ToString();
-    }
-  }
+  //  if (!svr_->IsSlave()) {
+  //    // Clean imported slot data
+  //    auto s = ClearKeysOfSlot(namespace_, import_slot_);
+  //    if (!s.ok()) {
+  //      LOG(WARNING) << "[import] Failed to clear keys of slot " << import_slot_ << " Current status is link error"
+  //                   << ", Err: " << s.ToString();
+  //    }
+  //  }
 
   LOG(INFO) << "[import] Stop importing for link error, slot: " << import_slot_;
   import_status_ = kImportFailed;

@@ -216,6 +216,7 @@ class SlotMigrate : public Redis::Database {
   uint64_t slot_snapshot_time_ = 0;
   uint64_t wal_begin_seq_ = 0;
   uint64_t wal_increment_seq_ = 0;
+  uint64_t seek_time_us = 0;
   uint64_t send_cmd_time = 0;
   bool batched_;
 };
