@@ -44,7 +44,7 @@ LevelMigrate::LevelMigrate(Server *svr, int migration_speed, int pipeline_size_l
 
 Status LevelMigrate::SendSnapshot() {
   auto start = Util::GetTimeStampUS();
-  rocksdb::WaitForBackgroundWork(storage_->GetDB());  // wait for current compaction to finish
+  rocksdb::CancelAllBackgroundWork(storage_->GetDB(), false);  // wait for current compaction to finish
   auto end = Util::GetTimeStampUS();
   LOG(INFO) << "Wait BG flush job for: " << end - start << " us" << std::endl;
   storage_->GetDB()->PauseBackgroundWork();
@@ -137,7 +137,13 @@ Status LevelMigrate::SendSnapshot() {
   std::string source_ssts = "";
 
   for (const auto &fn : result_ssts) {
-    auto abs_name = db_path_abs + "/" + src_config->db_dir + fn + " ";
+    std::string abs_name;
+    if (src_config->db_dir[0] == '/') {
+      abs_name = src_config->db_dir + fn + " ";
+    } else {
+      abs_name = db_path_abs + "/" + src_config->db_dir + fn + " ";
+    }
+
     source_ssts += abs_name;
   }
   source_ssts.pop_back();
@@ -178,7 +184,7 @@ Status LevelMigrate::SendSnapshot() {
     }
     meta_file_str.pop_back();
 
-    std::string ingestion_command = "CLUSTERX sst_ingest local";
+    std::string ingestion_command = " CLUSTERX sst_ingest local";
     ingestion_command += (" " + std::string(Engine::kMetadataColumnFamilyName));
     ingestion_command += (" " + meta_file_str);
     ingestion_command += (" " + dst_node_);
@@ -200,7 +206,7 @@ Status LevelMigrate::SendSnapshot() {
     }
     subkey_file_str.pop_back();
 
-    std::string ingestion_command = "CLUSTERX sst_ingest local";
+    std::string ingestion_command = " CLUSTERX sst_ingest local";
     ingestion_command += (" " + std::string(Engine::kMetadataColumnFamilyName));
     ingestion_command += (" " + subkey_file_str);
     ingestion_command += (" " + dst_node_);

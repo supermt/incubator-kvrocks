@@ -210,6 +210,7 @@ void SlotMigrate::RunStateMachine() {
         if (IsBatched()) {
           if (svr_->GetConfig()->migrate_method >= kLevelMigration) {
             state_machine_ = kSlotMigrateSuccess;
+            break;
           } else {
             for (auto slot : slot_job_->slots_) {
               migrate_slot_ = slot;

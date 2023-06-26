@@ -171,34 +171,6 @@ class CommandIngest : public Commander {
 
       *output = Redis::SimpleString("OK");
       return Status::OK();
-    } else if (remote_or_local_ == "remote") {
-      LOG(INFO) << "Fetching data from remote server: " << server_id_;
-      auto start = Util::GetTimeStampUS();
-      Status s = Status::OK();
-      s = svr->cluster_->FetchFileFromRemote(server_id_, files, svr->GetConfig()->migration_sync_dir);
-      auto end = Util::GetTimeStampUS();
-      if (!s.IsOK()) {
-        LOG(ERROR) << "Fetching data error " << s.Msg();
-        *output = Redis::SimpleString("Fetch error");
-        return s;
-      }
-      LOG(INFO) << "Fetched all SST, Time taken(us): " << end - start;
-      std::vector<std::string> ingestion_candidates;
-      for (auto file : files) {
-        ingestion_candidates.push_back(svr->GetConfig()->migration_sync_dir + "/" + file);
-      }
-
-      LOG(INFO) << "Start Ingestion";
-      bool fast_ingest = ingestion_mode_ == "fast";
-      s = svr->cluster_->IngestFiles(column_family_name_, ingestion_candidates, fast_ingest);
-
-      if (!s.IsOK()) {
-        *output = Redis::SimpleString("Ingestion error");
-        LOG(ERROR) << "Ingesting data error " << s.Msg();
-        return s;
-      }
-      *output = Redis::SimpleString("OK");
-      return Status::OK();
     }
     return {Status::NotOK, "Execution failed"};
   }

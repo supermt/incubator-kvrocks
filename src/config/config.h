@@ -129,7 +129,6 @@ struct Config {
   std::string sec_dir;
   std::string backup_dir;  // GUARD_BY(backup_mu_)
   std::string backup_sync_dir;
-  std::string migration_sync_dir;
   std::string global_migration_sync_dir;
   std::string migration_user;
   std::string migration_agent_location;

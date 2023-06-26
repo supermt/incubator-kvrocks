@@ -131,7 +131,6 @@ Config::Config() {
       {"dir", true, new StringField(&dir, "/tmp/kvrocks")},
       {"backup-dir", false, new StringField(&backup_dir, "")},
       {"log-dir", true, new StringField(&log_dir, "")},
-      {"migration_sync_dir", true, new StringField(&migration_sync_dir, "migration_sync")},
       {"global_migration_sync_dir", true, new StringField(&global_migration_sync_dir, "/tmp/migration_sync/")},
       {"migration_user", true, new StringField(&migration_user, "jinghua2")},
       {"migration_agent_location", true,
@@ -356,7 +355,7 @@ void Config::initFieldCallback() {
          checkpoint_dir = dir + "/checkpoint";
          sync_checkpoint_dir = dir + "/sync_checkpoint";
          backup_sync_dir = dir + "/backup_for_sync";
-         migration_sync_dir = dir + "/migration_sync";
+         global_migration_sync_dir = "/tmp/migration_sync/";
          return Status::OK();
        }},
       {"backup-dir",
